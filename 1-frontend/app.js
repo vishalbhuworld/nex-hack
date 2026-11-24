@@ -269,9 +269,21 @@ document.getElementById("refreshOrders").onclick = async () => {
   catch (error) { toast(error.message); }
 };
 
+document.querySelectorAll(".adminSideLink").forEach((button) => button.onclick = () => {
+  const target = document.getElementById(button.dataset.section);
+  if (!target || target.classList.contains("hidden")) return;
+  document.querySelectorAll(".adminSideLink").forEach((item) => item.classList.remove("active"));
+  button.classList.add("active");
+  target.scrollIntoView({ behavior:"smooth", block:"start" });
+});
+
 document.querySelectorAll(".nav").forEach((button) => button.onclick = () => {
   document.querySelectorAll(".nav").forEach((item) => item.classList.remove("active"));
+  document.querySelectorAll(".adminSideLink").forEach((item) => item.classList.remove("active"));
   button.classList.add("active");
+  if (button.dataset.view === "admin") {
+    document.querySelector('[data-section="adminTop"]').classList.add("active");
+  }
   document.querySelectorAll(".view").forEach((view) => view.classList.add("hidden"));
   document.getElementById(`${button.dataset.view}View`).classList.remove("hidden");
 });
@@ -294,6 +306,7 @@ function selectLoginMode(mode) {
 function showApp(user) {
   currentUser = user;
   document.body.dataset.role = user.role;
+  document.body.classList.add("authenticated");
   document.getElementById("authScreen").classList.add("hidden");
   document.getElementById("appMain").classList.remove("hidden");
   document.getElementById("demoNav").classList.remove("hidden");
@@ -306,6 +319,7 @@ function showApp(user) {
   const roleBadge = document.getElementById("roleBadge");
   roleBadge.textContent = roleLabels[user.role];
   roleBadge.classList.remove("hidden");
+  document.getElementById("adminTitle").textContent = user.role === "admin" ? "Admin Dashboard" : "Store fulfilment";
   document.querySelectorAll("[data-roles]").forEach((button) => {
     button.classList.toggle("hidden", !button.dataset.roles.split(",").includes(user.role));
   });

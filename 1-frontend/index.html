@@ -11,8 +11,14 @@
     <div class="brand"><span class="logo">V</span><b>VELTRIX SHOP</b><small>Online Store</small></div>
     <nav id="demoNav" class="hidden">
       <button class="nav active" data-view="shop" data-roles="customer">Customer Shop</button>
-      <button class="nav" data-view="admin" data-roles="admin,staff">Store Operations</button>
+      <button class="nav" data-view="admin" data-roles="admin,staff">Dashboard</button>
       <button class="nav" data-view="timeline" data-roles="staff">Staff Timeline</button>
+      <div class="sidebarDivider" data-roles="admin"></div>
+      <span class="sidebarCaption" data-roles="admin">WORKSPACE</span>
+      <button class="adminSideLink active" data-section="adminTop" data-roles="admin">Overview</button>
+      <button class="adminSideLink" data-section="demoControls" data-roles="admin">Demo &amp; testing</button>
+      <button class="adminSideLink" data-section="inventorySection" data-roles="admin">Stores &amp; inventory</button>
+      <button class="adminSideLink" data-section="staffManagement" data-roles="admin">People &amp; access</button>
     </nav>
     <div class="headerActions"><button id="reset" class="ghost hidden">↻ Reset demo</button><button id="logout" class="ghost hidden">Sign out</button></div>
   </header>
@@ -90,14 +96,25 @@
     </section>
 
     <section id="adminView" class="view hidden">
-      <div class="sectionHeading">
-        <div><p class="eyebrow">OPERATIONS CONTROL</p><h1>Store fulfilment</h1></div>
-        <div class="actions">
-          <button id="refreshOrders" class="ghost">Refresh orders</button>
-          <button id="demoScenario" class="primary small">Load split-order demo</button>
-          <button id="concurrency" class="primary small">Run stock race</button>
-        </div>
+      <div class="sectionHeading adminHeading" id="adminTop">
+        <div><p class="eyebrow">OPERATIONS CONTROL</p><h1 id="adminTitle">Store fulfilment</h1><p class="adminSubtitle">Orders, inventory and fulfilment across every store.</p></div>
+        <span class="systemPill"><span></span> Operations active</span>
       </div>
+      <div class="opsSummary">
+        <article class="opsMetric"><span>Total orders</span><b id="incomingOrderCount">0</b></article>
+        <article class="opsMetric"><span>Pending orders</span><b id="pendingOrderCount">0</b></article>
+        <article class="opsMetric"><span>Completed orders</span><b id="completedOrderCount">0</b></article>
+        <article class="opsMetric"><span>Units awaiting action</span><b id="pendingItemCount">0</b></article>
+        <div id="storeOrderSummary" class="storeOrderSummary"></div>
+      </div>
+      <section id="demoControls" class="demoPanel">
+        <div class="sectionTitle"><h2>Demo &amp; testing scenarios</h2><span>Safe tools for testing store operations</span></div>
+        <div class="scenarioGrid">
+          <article class="scenarioCard scenarioBlue"><span class="scenarioIcon">↗</span><div><b>Stock race</b><small>Test concurrent purchases</small></div><button id="concurrency" class="scenarioButton">Run test</button></article>
+          <article class="scenarioCard scenarioPurple"><span class="scenarioIcon">▦</span><div><b>Split order</b><small>Load a multi-store example</small></div><button id="demoScenario" class="scenarioButton">Load demo</button></article>
+          <article class="scenarioCard scenarioGreen"><span class="scenarioIcon">⟳</span><div><b>Refresh data</b><small>Update orders and inventory</small></div><button id="refreshOrders" class="scenarioButton">Refresh</button></article>
+        </div>
+      </section>
       <section id="staffManagement" class="staffManagement hidden">
         <div class="sectionTitle"><h2>People &amp; access</h2><span>Owner/Admin only · passwords are never displayed</span></div>
         <div class="peopleCounts">
@@ -122,14 +139,10 @@
           </section>
         </div>
       </section>
-      <div class="opsSummary">
-        <article class="opsMetric"><span>Total orders</span><b id="incomingOrderCount">0</b></article>
-        <article class="opsMetric"><span>Pending orders</span><b id="pendingOrderCount">0</b></article>
-        <article class="opsMetric"><span>Completed orders</span><b id="completedOrderCount">0</b></article>
-        <article class="opsMetric"><span>Units awaiting action</span><b id="pendingItemCount">0</b></article>
-        <div id="storeOrderSummary" class="storeOrderSummary"></div>
-      </div>
-      <div id="storeGrid" class="storeGrid"></div>
+      <section id="inventorySection" class="inventorySection">
+        <div class="sectionTitle"><h2>Store inventory</h2><span>Stock availability and reservations by store</span></div>
+        <div id="storeGrid" class="storeGrid"></div>
+      </section>
       <div class="orderSection"><div class="sectionTitle"><h2>Orders</h2><span id="orderBadge"></span></div><div id="orders" class="orders"></div></div>
     </section>
 
