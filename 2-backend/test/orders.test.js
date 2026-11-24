@@ -42,6 +42,21 @@ test("customers receive a payment code and can cancel one paid item", async (t) 
       pincode: "411001",
     },
   });
+  const paymentQr = await request(`/api/orders/${placedOrder.id}/payment-qr`, customer.token);
+  assert.equal(paymentQr.upiId, "vk6654590@oksbi");
+  assert.equal(paymentQr.amount, placedOrder.total);
+  assert.match(paymentQr.qrDataUrl, /^data:image\/png;base64,/);
+  const paymentParameters = new URL(paymentQr.paymentUri).searchParams;
+  assert.equal(paymentParameters.get("pa"), "vk6654590@oksbi");
+  assert.equal(paymentParameters.get("am"), placedOrder.total.toFixed(2));
+  assert.equal(paymentParameters.get("cu"), "INR");
+
+  const anotherCustomer = await auth.customerLogin(`other-order-test-${Date.now()}@example.com`);
+  const unauthorizedQrResponse = await fetch(`${baseUrl}/api/orders/${placedOrder.id}/payment-qr`, {
+    headers: { Authorization: `Bearer ${anotherCustomer.token}`, Connection: "close" },
+  });
+  assert.equal(unauthorizedQrResponse.status, 403);
+
   const payment = await request(`/api/orders/${placedOrder.id}/payment`, staff.token, {
     eventId: "orders-route-payment-test",
   });

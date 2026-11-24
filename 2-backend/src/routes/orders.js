@@ -1,8 +1,10 @@
 const express = require("express");
+const QRCode = require("qrcode");
 const store = require("../store");
 const auth = require("../auth");
 
 const router = express.Router();
+const UPI_ID = process.env.UPI_ID || "vk6654590@oksbi";
 
 router.get("/", auth.authenticate, async (req, res, next) => {
   try {
@@ -74,6 +76,37 @@ router.get("/catalog", auth.authenticate, auth.allowRoles("customer"), async (_r
     res.json({
       products: snapshot.products.map((product) => ({ ...product, available: availability[product.sku] || 0 })),
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/:orderId/payment-qr", auth.authenticate, auth.allowRoles("customer"), async (req, res, next) => {
+  try {
+    const order = store.getSnapshot().orders.find((entry) => entry.id === req.params.orderId);
+    if (!order) throw Object.assign(new Error("Unknown order"), { status: 404 });
+    if (order.customerEmail !== req.user.email) {
+      throw Object.assign(new Error("You can only view payment details for your own orders"), { status: 403 });
+    }
+    if (order.status !== "reserved") {
+      throw Object.assign(new Error("Payment QR is only available for orders awaiting payment"), { status: 409 });
+    }
+    if (!/^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$/.test(UPI_ID)) {
+      throw Object.assign(new Error("UPI payment address is not configured correctly"), { status: 500 });
+    }
+
+    const amount = order.items.filter((item) => item.status === "reserved")
+      .reduce((total, item) => total + item.amount, 0);
+    if (amount <= 0) throw Object.assign(new Error("No payment is due for this order"), { status: 409 });
+    const paymentUri = `upi://pay?${new URLSearchParams({
+      pa: UPI_ID,
+      pn: "Veltrix Shop",
+      am: amount.toFixed(2),
+      cu: "INR",
+      tn: `Order ${order.id}`,
+    })}`;
+    const qrDataUrl = await QRCode.toDataURL(paymentUri, { errorCorrectionLevel: "M", margin: 2, width: 256 });
+    res.json({ upiId: UPI_ID, amount, paymentUri, qrDataUrl });
   } catch (error) {
     next(error);
   }

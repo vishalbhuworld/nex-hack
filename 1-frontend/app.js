@@ -204,8 +204,10 @@ function renderCustomerOrders() {
           <span class="part">${escapeHtml(item.name)} ×${item.quantity} · ${escapeHtml(item.storeName || item.storeId)} · ${escapeHtml(item.status)}</span>
           ${["reserved", "paid"].includes(item.status) ? `<button type="button" data-cancel-item="${escapeHtml(item.itemId)}" data-order="${escapeHtml(order.id)}" data-item-status="${escapeHtml(item.status)}" data-item-name="${escapeHtml(item.name)}" data-item-amount="${Number(item.amount)}">${item.status === "paid" ? `Cancel & refund ${money(item.amount)}` : "Cancel item"}</button>` : ""}
         </div>`).join("")}</div>
+      ${order.status === "reserved" ? `<div class="orderPayment" data-payment-qr="${escapeHtml(order.id)}" aria-live="polite"><p class="hint">Loading UPI payment QR…</p></div>` : ""}
       <p class="hint">Order total: ${money(order.total)}${order.paidTotal ? `<br>Paid: ${money(order.paidTotal)}` : ""}${order.refundTotal ? `<br>Demo refund recorded: ${money(order.refundTotal)}` : ""}${order.paymentCode ? `<br>Payment confirmation code: <b>${escapeHtml(order.paymentCode)}</b>` : ""}</p>
     </article>`).join("") : `<p class="hint">Your placed orders and their status will appear here.</p>`;
+  snapshot.orders.filter((order) => order.status === "reserved").forEach((order) => loadPaymentQr(order.id));
   document.querySelectorAll("[data-cancel-item]").forEach((button) => button.onclick = async () => {
     const orderId = button.dataset.order;
     const itemId = button.dataset.cancelItem;
@@ -224,6 +226,26 @@ function renderCustomerOrders() {
       await load();
     } catch (error) { toast(error.message); }
   });
+}
+
+async function loadPaymentQr(orderId) {
+  const findTarget = () => [...document.querySelectorAll("[data-payment-qr]")]
+    .find((element) => element.dataset.paymentQr === orderId);
+  const target = findTarget();
+  if (!target) return;
+  try {
+    const payment = await api(`/api/orders/${encodeURIComponent(orderId)}/payment-qr`);
+    const currentTarget = findTarget();
+    if (!currentTarget) return;
+    currentTarget.innerHTML = `
+      <img src="${escapeHtml(payment.qrDataUrl)}" alt="UPI payment QR for order ${escapeHtml(orderId)}">
+      <div><b>Scan to pay ${money(payment.amount)}</b><span>UPI ID: ${escapeHtml(payment.upiId)}</span>
+      <a href="${escapeHtml(payment.paymentUri)}">Open in a UPI app</a>
+      <small>This QR does not automatically verify payment or update your order.</small></div>`;
+  } catch (error) {
+    const currentTarget = findTarget();
+    if (currentTarget) currentTarget.innerHTML = `<p class="hint">${escapeHtml(error.message)}</p>`;
+  }
 }
 
 function renderCart() {
