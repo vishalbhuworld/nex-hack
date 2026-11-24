@@ -84,7 +84,7 @@ h1 span { color:#99a4b5; }
 .loginMode.active { color:var(--blue); background:var(--role-wash); border-color:var(--blue); }
 .loginForm { display:grid; gap:14px; }.loginForm label,.staffForm label { display:grid; gap:6px; font-size:13px; font-weight:700; }
 .loginForm input,.staffForm input { height:42px; border:1px solid var(--line); border-radius:8px; padding:0 11px; font:inherit; }
-.loginError { min-height:18px; color:#c54437; font-size:13px; }.demoCredential { margin:10px 0 0; border-top:1px solid var(--line); padding-top:14px; color:var(--muted); font-size:12px; }
+.loginError { min-height:18px; color:#c54437; font-size:13px; }
 .myOrders { margin-top:32px; }.staffManagement { margin-top:28px; border-top:1px solid var(--line); padding-top:24px; }
 .staffForm { display:grid; grid-template-columns:repeat(4,1fr); align-items:end; gap:12px; }.staffList { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
 .staffBadge { padding:8px 12px; background:var(--wash); border:1px solid var(--line); border-radius:8px; font-size:13px; }
