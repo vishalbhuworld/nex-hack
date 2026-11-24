@@ -95,21 +95,29 @@ function renderCustomerOrders() {
   const target = document.getElementById("customerOrders");
   target.innerHTML = snapshot.orders.length ? snapshot.orders.map((order) => `
     <article class="orderCard">
-      <div class="orderHead"><b>Order ${order.id}</b><span class="pill">${order.status.replaceAll("_", " ").toUpperCase()}</span></div>
-      <div class="orderParts">${order.items.map((item) => `<span class="part">${item.name} ×${item.quantity} · ${item.status}</span>`).join("")}</div>
-      <p class="hint">Order total: ${money(order.total)}</p>
-      ${order.items.some((item) => ["reserved", "paid"].includes(item.status)) ? `<div class="actions"><button data-cancel-order="${escapeHtml(order.id)}">Cancel remaining items</button></div>` : ""}
+      <div class="orderHead"><b>Order ${escapeHtml(order.id)}</b><span class="pill">${escapeHtml(order.status.replaceAll("_", " ").toUpperCase())}</span></div>
+      <div class="customerOrderItems">${order.items.map((item) => `
+        <div class="customerOrderItem">
+          <span class="part">${escapeHtml(item.name)} ×${item.quantity} · ${escapeHtml(item.storeName || item.storeId)} · ${escapeHtml(item.status)}</span>
+          ${["reserved", "paid"].includes(item.status) ? `<button type="button" data-cancel-item="${escapeHtml(item.itemId)}" data-order="${escapeHtml(order.id)}" data-item-status="${escapeHtml(item.status)}" data-item-name="${escapeHtml(item.name)}" data-item-amount="${Number(item.amount)}">${item.status === "paid" ? `Cancel & refund ${money(item.amount)}` : "Cancel item"}</button>` : ""}
+        </div>`).join("")}</div>
+      <p class="hint">Order total: ${money(order.total)}${order.paidTotal ? `<br>Paid: ${money(order.paidTotal)}` : ""}${order.refundTotal ? `<br>Demo refund recorded: ${money(order.refundTotal)}` : ""}${order.paymentCode ? `<br>Payment confirmation code: <b>${escapeHtml(order.paymentCode)}</b>` : ""}</p>
     </article>`).join("") : `<p class="hint">Your placed orders and their status will appear here.</p>`;
-  document.querySelectorAll("[data-cancel-order]").forEach((button) => button.onclick = async () => {
+  document.querySelectorAll("[data-cancel-item]").forEach((button) => button.onclick = async () => {
+    const orderId = button.dataset.order;
+    const itemId = button.dataset.cancelItem;
+    const paid = button.dataset.itemStatus === "paid";
+    const amount = Number(button.dataset.itemAmount);
+    const prompt = paid
+      ? `Cancel ${button.dataset.itemName}? A demo refund of ${money(amount)} will be recorded.`
+      : `Cancel ${button.dataset.itemName}? Other items in this order will stay reserved.`;
+    if (!window.confirm(prompt)) return;
     try {
-      const eventId = `customer-cancel-${button.dataset.cancelOrder}`;
-      const body = JSON.stringify({ eventId, delayMs:1200 });
-      await api(`/api/orders/${button.dataset.cancelOrder}/cancel`, {
+      await api(`/api/orders/${orderId}/cancel`, {
         method:"POST",
-        body,
+        body:JSON.stringify({ eventId:`customer-cancel-${orderId}-${itemId}`, itemId }),
       });
-      await api(`/api/orders/${button.dataset.cancelOrder}/cancel`, { method:"POST", body });
-      toast("Delayed cancellation accepted; duplicate notification ignored");
+      toast(paid ? `Item cancelled. Demo refund ${money(amount)} recorded.` : "Item cancelled; the rest of the order remains.");
       await load();
     } catch (error) { toast(error.message); }
   });
@@ -154,9 +162,8 @@ function renderOrders() {
   document.querySelectorAll("[data-payment]").forEach((button) => button.onclick = async () => {
     try {
       const eventId = `payment-${button.dataset.payment}-demo`;
-      await api(`/api/orders/${button.dataset.payment}/payment`, { method:"POST", body:JSON.stringify({ eventId, delayMs:2000 }) });
-      await api(`/api/orders/${button.dataset.payment}/payment`, { method:"POST", body:JSON.stringify({ eventId, delayMs:2000 }) });
-      toast("Duplicate payment event ignored safely");
+      const result = await api(`/api/orders/${button.dataset.payment}/payment`, { method:"POST", body:JSON.stringify({ eventId }) });
+      toast(result.paymentCode ? `Demo payment confirmed · code ${result.paymentCode}` : `Payment ${result.operation.status}`);
       await load();
     } catch (error) { toast(error.message); }
   });

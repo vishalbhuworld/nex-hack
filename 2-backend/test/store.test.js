@@ -30,6 +30,12 @@ test("delayed payment stays pending and duplicate notifications apply once", asy
   assert.equal(snapshot.orders[0].status, "paid");
   assert.equal(snapshot.financial.length, 1);
   assert.equal(snapshot.financial[0].status, "applied");
+  assert.equal(store.processFinancialEvent({
+    orderId: order.id,
+    eventId: "payment-delay-test",
+    type: "payment",
+    amount: order.total,
+  }).duplicate, true);
 });
 
 test("a delayed payment is rejected after the customer cancels", async () => {
@@ -48,6 +54,7 @@ test("a delayed payment is rejected after the customer cancels", async () => {
     eventId: "cancel-test",
     type: "cancellation",
     amount: 0,
+    itemId: order.items[0].itemId,
   });
   assert.equal(cancellation.operation.status, "applied");
   assert.equal(store.getSnapshot().orders[0].status, "cancelled");
@@ -133,13 +140,103 @@ test("parallel purchase arrivals cannot reserve more stock than exists", async (
   assert.ok(result.snapshot.stores.every((entry) => entry.inventory.every((item) => item.available >= 0)));
 });
 
-test("cancelling paid items creates one refund and repeated cancellation is idempotent", () => {
+test("cancelling one item from a paid split-store order refunds only that item", () => {
+  store.reset();
+  const order = store.createOrder({ items: [{ sku: "PHONE-01", quantity: 7 }] });
+  assert.equal(new Set(order.items.map((item) => item.storeId)).size, 3);
+  store.processFinancialEvent({ orderId: order.id, eventId: "paid-before-partial-cancel", type: "payment", amount: order.total });
+  const paidOrder = store.getSnapshot().orders[0];
+  const paymentCode = paidOrder.paymentCode;
+  assert.match(paymentCode, /^PAY-[A-F0-9]{12}$/);
+
+  const cancelledItem = paidOrder.items.find((item) => item.storeId === "store-a");
+  const remainingItems = paidOrder.items.filter((item) => item.itemId !== cancelledItem.itemId);
+  const first = store.processFinancialEvent({
+    orderId: order.id,
+    eventId: "cancel-one-store-item",
+    type: "cancellation",
+    amount: 0,
+    itemId: cancelledItem.itemId,
+  });
+  const duplicate = store.processFinancialEvent({
+    orderId: order.id,
+    eventId: "cancel-one-store-item",
+    type: "cancellation",
+    amount: 0,
+    itemId: cancelledItem.itemId,
+  });
+  const snapshot = store.getSnapshot();
+  const updatedOrder = snapshot.orders[0];
+
+  assert.equal(first.operation.status, "applied");
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(updatedOrder.status, "partially_fulfilled");
+  assert.equal(updatedOrder.paymentCode, paymentCode);
+  assert.equal(updatedOrder.items.find((item) => item.itemId === cancelledItem.itemId).status, "refunded");
+  assert.ok(remainingItems.every((item) => updatedOrder.items.find((entry) => entry.itemId === item.itemId).status === "paid"));
+  const refunds = snapshot.financial.filter((operation) => operation.type === "refund");
+  assert.equal(refunds.length, 1);
+  assert.equal(refunds[0].amount, cancelledItem.amount);
+  assert.deepEqual(refunds[0].itemIds, [cancelledItem.itemId]);
+  assert.equal(store.processFinancialEvent({
+    orderId: order.id,
+    eventId: "cancel-same-item-again",
+    type: "cancellation",
+    amount: 0,
+    itemId: cancelledItem.itemId,
+  }).operation.status, "rejected");
+});
+
+test("cancelling one reserved item leaves the rest payable", () => {
+  store.reset();
+  const order = store.createOrder({ items: [{ sku: "PHONE-01", quantity: 5 }] });
+  const cancelledItem = order.items.find((item) => item.storeId === "store-a");
+  const remainingItem = order.items.find((item) => item.itemId !== cancelledItem.itemId);
+
+  store.processFinancialEvent({
+    orderId: order.id,
+    eventId: "cancel-one-reserved-item",
+    type: "cancellation",
+    amount: 0,
+    itemId: cancelledItem.itemId,
+  });
+  const reservation = store.getSnapshot().orders[0];
+  assert.equal(reservation.status, "reserved");
+  assert.equal(reservation.items.find((item) => item.itemId === cancelledItem.itemId).status, "cancelled");
+
+  const payment = store.processFinancialEvent({
+    orderId: order.id,
+    eventId: "pay-remaining-reserved-item",
+    type: "payment",
+    amount: remainingItem.amount,
+  });
+  const paidOrder = store.getSnapshot().orders[0];
+  assert.equal(payment.operation.status, "applied");
+  assert.equal(paidOrder.items.find((item) => item.itemId === remainingItem.itemId).status, "paid");
+  assert.equal(paidOrder.items.find((item) => item.itemId === cancelledItem.itemId).status, "cancelled");
+  assert.equal(paidOrder.status, "partially_fulfilled");
+  assert.match(paidOrder.paymentCode, /^PAY-[A-F0-9]{12}$/);
+});
+
+test("cancelling the only paid item creates one refund and repeated cancellation is idempotent", () => {
   store.reset();
   const order = store.createOrder({ items: [{ sku: "PHONE-01", quantity: 1 }] });
   store.processFinancialEvent({ orderId: order.id, eventId: "paid-before-cancel", type: "payment", amount: order.total });
 
-  const first = store.processFinancialEvent({ orderId: order.id, eventId: "cancel-paid-test", type: "cancellation", amount: 0 });
-  const duplicate = store.processFinancialEvent({ orderId: order.id, eventId: "cancel-paid-test", type: "cancellation", amount: 0 });
+  const first = store.processFinancialEvent({
+    orderId: order.id,
+    eventId: "cancel-paid-test",
+    type: "cancellation",
+    amount: 0,
+    itemId: order.items[0].itemId,
+  });
+  const duplicate = store.processFinancialEvent({
+    orderId: order.id,
+    eventId: "cancel-paid-test",
+    type: "cancellation",
+    amount: 0,
+    itemId: order.items[0].itemId,
+  });
   const snapshot = store.getSnapshot();
 
   assert.equal(first.operation.status, "applied");

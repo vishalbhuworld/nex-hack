@@ -9,13 +9,27 @@ router.get("/", auth.authenticate, async (req, res, next) => {
     const snapshot = store.getSnapshot();
     await store.flush();
     if (req.user.role === "customer") {
+      const storeNames = Object.fromEntries(snapshot.stores.map((entry) => [entry.id, entry.name]));
       return res.json({
         orders: snapshot.orders.filter((order) => order.customerEmail === req.user.email).map((order) => ({
           id: order.id,
           status: order.status,
           total: order.total,
+          paidTotal: order.items.filter((item) => ["paid", "dispatched"].includes(item.status))
+            .reduce((sum, item) => sum + item.amount, 0),
+          refundTotal: order.items.filter((item) => item.status === "refunded")
+            .reduce((sum, item) => sum + item.amount, 0),
+          paymentCode: order.paymentCode || null,
           createdAt: order.createdAt,
-          items: order.items.map(({ name, quantity, status }) => ({ name, quantity, status })),
+          items: order.items.map(({ itemId, name, quantity, status, amount, storeId }) => ({
+            itemId,
+            name,
+            quantity,
+            status,
+            amount,
+            storeId,
+            storeName: storeNames[storeId] || storeId,
+          })),
         })),
       });
     }
@@ -112,18 +126,25 @@ router.post("/", auth.authenticate, auth.allowRoles("customer", "admin"), async 
 router.post("/:orderId/payment", auth.authenticate, auth.allowRoles("admin", "staff"), async (req, res, next) => {
   try {
     const eventId = req.body.eventId || `pay-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const order = store.getSnapshot().orders.find((entry) => entry.id === req.params.orderId);
+    const snapshot = store.getSnapshot();
+    const order = snapshot.orders.find((entry) => entry.id === req.params.orderId);
     if (!order) throw Object.assign(new Error("Unknown order"), { status: 404 });
     const delayMs = Number(req.body.delayMs || 0);
+    const existingPayment = snapshot.financial.find((operation) => operation.eventId === eventId);
+    const amount = existingPayment && existingPayment.orderId === order.id && existingPayment.type === "payment"
+      ? existingPayment.amount
+      : order.items.filter((item) => item.status === "reserved")
+        .reduce((sum, item) => sum + item.amount, 0);
     const result = store.processFinancialEvent({
       orderId: req.params.orderId,
       eventId,
       type: "payment",
-      amount: order.total,
+      amount,
       delayMs,
     });
     await store.flush();
-    res.json(result);
+    const updatedOrder = store.getSnapshot().orders.find((entry) => entry.id === req.params.orderId);
+    res.json({ ...result, paymentCode: updatedOrder.paymentCode || null });
   } catch (error) {
     next(error);
   }
@@ -142,6 +163,7 @@ router.post("/:orderId/cancel", auth.authenticate, auth.allowRoles("customer", "
       eventId: req.body.eventId || `cancel-${orderId}-${Date.now()}`,
       type: "cancellation",
       amount: 0,
+      itemId: req.body.itemId,
       delayMs: req.body.delayMs === undefined ? 0 : Number(req.body.delayMs),
     });
     await store.flush();
@@ -153,8 +175,8 @@ router.post("/:orderId/cancel", auth.authenticate, auth.allowRoles("customer", "
 
 router.post("/:orderId/financial-event", auth.authenticate, auth.allowRoles("admin", "staff"), async (req, res, next) => {
   try {
-    const { eventId, type, amount, delayMs } = req.body;
-    const result = store.processFinancialEvent({ orderId: req.params.orderId, eventId, type, amount, delayMs });
+    const { eventId, type, amount, itemIds, delayMs } = req.body;
+    const result = store.processFinancialEvent({ orderId: req.params.orderId, eventId, type, amount, itemIds, delayMs });
     await store.flush();
     res.json(result);
   } catch (error) {

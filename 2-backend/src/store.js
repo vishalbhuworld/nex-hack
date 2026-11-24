@@ -3,6 +3,13 @@ const crypto = require("crypto");
 const now = () => new Date().toISOString();
 const id = (prefix) => `${prefix}-${crypto.randomBytes(4).toString("hex")}`;
 const storeError = (message, status = 400) => Object.assign(new Error(message), { status });
+const paymentCode = () => {
+  let code;
+  do {
+    code = `PAY-${crypto.randomBytes(6).toString("hex").toUpperCase()}`;
+  } while (Object.values(state.orders).some((order) => order.paymentCode === code));
+  return code;
+};
 
 function createInitialState() {
   return {
@@ -145,10 +152,14 @@ function stateFromDocuments(documents) {
     ])),
     reserved,
     reservations,
-    orders: Object.fromEntries(read("orders").map(([documentId, order]) => [
-      documentId,
-      { ...cloneValue(order), id: order.id || documentId },
-    ])),
+    orders: Object.fromEntries(read("orders").map(([documentId, order]) => {
+      const restored = { ...cloneValue(order), id: order.id || documentId };
+      restored.items = restored.items.map((item, index) => ({
+        ...item,
+        itemId: item.itemId || `${restored.id}-item-${index + 1}`,
+      }));
+      return [documentId, restored];
+    })),
     financial: Object.fromEntries(read("financialEvents").map(([documentId, operation]) => [
       documentId,
       { ...cloneValue(operation), eventId: operation.eventId || documentId },
@@ -272,7 +283,10 @@ function copyInventory() {
 function serializeOrder(order) {
   return {
     ...order,
-    items: order.items.map((item) => ({ ...item })),
+    items: order.items.map((item, index) => ({
+      ...item,
+      itemId: item.itemId || `${order.id}-item-${index + 1}`,
+    })),
   };
 }
 
@@ -363,6 +377,7 @@ function createOrder({ customer = "Demo Customer", customerEmail = null, deliver
       if (quantity > 0 && reserveProduct(store.id, item.sku, quantity)) {
         const product = state.products.find((entry) => entry.sku === item.sku);
         orderItems.push({
+          itemId: id("item"),
           sku: item.sku,
           name: product.name,
           quantity,
@@ -407,11 +422,30 @@ function createOrder({ customer = "Demo Customer", customerEmail = null, deliver
   return serializeOrder(order);
 }
 
+function releaseReservedItem(order, item) {
+  const key = `${item.storeId}:${item.sku}`;
+  state.reserved[key] = Math.max(0, (state.reserved[key] || 0) - item.quantity);
+  const reservation = state.reservations[order.reservationId];
+  if (!reservation || reservation.status !== "active") return;
+
+  let remaining = item.quantity;
+  reservation.items.forEach((reservedItem) => {
+    if (reservedItem.storeId !== item.storeId || reservedItem.sku !== item.sku || remaining === 0) return;
+    const released = Math.min(reservedItem.quantity, remaining);
+    reservedItem.quantity -= released;
+    remaining -= released;
+  });
+  reservation.items = reservation.items.filter((reservedItem) => reservedItem.quantity > 0);
+  if (reservation.items.length === 0) reservation.status = "cancelled";
+}
+
 function applyFinancialEvent(operation) {
   if (operation.type === "payment" || operation.type === "cancellation") expireReservations();
   const order = state.orders[operation.orderId];
   if (operation.type === "payment") {
-    if (order.status !== "reserved" || order.items.some((item) => item.status !== "reserved")) {
+    const payableItems = order.items.filter((item) => item.status === "reserved");
+    const payableAmount = payableItems.reduce((sum, item) => sum + item.amount, 0);
+    if (order.status !== "reserved" || payableItems.length === 0 || operation.amount !== payableAmount) {
       operation.status = "rejected";
       operation.appliedAt = now();
       addEvent("payment_rejected", `Payment ${operation.eventId} rejected because the order is no longer reserved`, operation.orderId);
@@ -419,53 +453,53 @@ function applyFinancialEvent(operation) {
     }
     operation.status = "applied";
     operation.appliedAt = now();
-    order.status = "paid";
-    order.items.forEach((item) => { item.status = "paid"; });
-    for (const item of order.items) {
+    payableItems.forEach((item) => { item.status = "paid"; });
+    order.status = order.items.every((item) => item.status === "paid") ? "paid" : "partially_fulfilled";
+    for (const item of payableItems) {
       const key = `${item.storeId}:${item.sku}`;
       state.reserved[key] = Math.max(0, (state.reserved[key] || 0) - item.quantity);
       state.inventory[item.storeId][item.sku] -= item.quantity;
     }
     if (state.reservations[order.reservationId]) state.reservations[order.reservationId].status = "consumed";
+    order.paymentCode = order.paymentCode || paymentCode();
     addEvent("payment_applied", `Payment of ₹${operation.amount.toLocaleString("en-IN")} applied`, operation.orderId);
   } else if (operation.type === "cancellation") {
-    let refundAmount = 0;
-    let cancelled = false;
-    for (const item of order.items) {
-      if (item.status === "reserved") {
-        const key = `${item.storeId}:${item.sku}`;
-        state.reserved[key] = Math.max(0, (state.reserved[key] || 0) - item.quantity);
-        item.status = "cancelled";
-        cancelled = true;
-      } else if (item.status === "paid") {
-        refundAmount += item.amount;
-        item.status = "failed";
-        cancelled = true;
-      }
-    }
-    if (!cancelled) {
+    const item = order.items.find((entry) => entry.itemId === operation.itemId);
+    if (!item || !["reserved", "paid"].includes(item.status)) {
       operation.status = "rejected";
       operation.appliedAt = now();
-      addEvent("cancellation_rejected", `Cancellation ${operation.eventId} rejected because no cancellable items remain`, operation.orderId);
+      addEvent("cancellation_rejected", `Cancellation ${operation.eventId} rejected because its item is no longer cancellable`, operation.orderId);
       return;
+    }
+    if (item.status === "reserved") {
+      releaseReservedItem(order, item);
+      item.status = "cancelled";
+    } else {
+      item.status = "failed";
     }
     operation.status = "applied";
     operation.appliedAt = now();
-    if (state.reservations[order.reservationId]) state.reservations[order.reservationId].status = "cancelled";
-    if (refundAmount > 0) {
+    if (item.status === "failed") {
       processFinancialEvent({
         orderId: operation.orderId,
         eventId: id("refund"),
         type: "refund",
-        amount: refundAmount,
+        amount: item.amount,
+        itemIds: [item.itemId],
       });
     }
     updateOrderStatus(order);
-    addEvent("cancellation_applied", `Cancellation applied; refund ₹${refundAmount.toLocaleString("en-IN")}`, operation.orderId);
+    addEvent("cancellation_applied", `Item cancelled; refund ₹${(item.status === "refunded" ? item.amount : 0).toLocaleString("en-IN")}`, operation.orderId);
   } else {
-    const failedItems = order.items.filter((item) => item.status === "failed");
-    const refundableAmount = failedItems.reduce((sum, item) => sum + item.amount, 0);
-    if (failedItems.length === 0 || operation.amount !== refundableAmount) {
+    const failedItems = operation.itemIds
+      ? operation.itemIds.map((itemId) => order.items.find((item) => item.itemId === itemId))
+      : order.items.filter((item) => item.status === "failed");
+    const invalidItems = failedItems.length === 0 || failedItems.some((item) => !item || item.status !== "failed");
+    const refundableAmount = invalidItems ? 0 : failedItems.reduce((sum, item) => sum + item.amount, 0);
+    if (
+      invalidItems ||
+      operation.amount !== refundableAmount
+    ) {
       operation.status = "rejected";
       operation.appliedAt = now();
       addEvent("refund_rejected", `Refund ${operation.eventId} rejected because the refundable amount changed`, operation.orderId);
@@ -480,7 +514,8 @@ function applyFinancialEvent(operation) {
     for (const issue of state.issues) {
       if (issue.orderId !== operation.orderId) continue;
       issue.affectedItems.forEach((affectedItem) => {
-        const orderItem = failedItems.find((item) => item.storeId === issue.storeId && item.sku === affectedItem.sku);
+        const orderItem = failedItems.find((item) => item.itemId === affectedItem.itemId) ||
+          failedItems.find((item) => !affectedItem.itemId && item.storeId === issue.storeId && item.sku === affectedItem.sku);
         if (orderItem) affectedItem.status = orderItem.status;
       });
     }
@@ -488,16 +523,26 @@ function applyFinancialEvent(operation) {
   }
 }
 
-function processFinancialEvent({ orderId, eventId, type, amount, delayMs = 0 }) {
+function processFinancialEvent({ orderId, eventId, type, amount, itemId, itemIds, delayMs = 0 }) {
   const order = state.orders[orderId];
   if (!order) throw storeError("Unknown order", 404);
   if (!eventId) throw storeError("eventId is required");
   if (!["payment", "refund", "cancellation"].includes(type)) throw storeError("Unsupported financial event type");
+  if (type === "cancellation" && (typeof itemId !== "string" || !itemId.trim())) {
+    throw storeError("itemId is required for item cancellation");
+  }
+  if (type === "refund" && itemIds !== undefined && (
+    !Array.isArray(itemIds) ||
+    itemIds.length === 0 ||
+    itemIds.some((targetId) => typeof targetId !== "string" || !targetId.trim()) ||
+    new Set(itemIds).size !== itemIds.length
+  )) {
+    throw storeError("itemIds must contain unique item IDs");
+  }
   const numericAmount = Number(amount);
   if (!Number.isFinite(numericAmount) || numericAmount < 0 || (type !== "cancellation" && numericAmount === 0)) {
     throw storeError("Financial amount must be greater than zero");
   }
-  if (type === "payment" && numericAmount !== order.total) throw storeError("Payment amount must match the order total");
   if (type === "cancellation" && numericAmount !== 0) throw storeError("Cancellation events must have a zero amount");
   const delay = Number(delayMs);
   if (!Number.isInteger(delay) || delay < 0 || delay > 30_000) {
@@ -505,18 +550,32 @@ function processFinancialEvent({ orderId, eventId, type, amount, delayMs = 0 }) 
   }
   const existing = state.financial[eventId];
   if (existing) {
-    if (existing.orderId !== orderId || existing.type !== type || existing.amount !== numericAmount) {
+    const itemTargetsChanged = type === "cancellation"
+      ? existing.itemId !== itemId
+      : type === "refund" && itemIds !== undefined &&
+        JSON.stringify(existing.itemIds || null) !== JSON.stringify(itemIds);
+    if (
+      existing.orderId !== orderId ||
+      existing.type !== type ||
+      existing.amount !== numericAmount ||
+      itemTargetsChanged
+    ) {
       throw storeError("eventId was already used for a different financial operation", 409);
     }
     addEvent("duplicate_event_ignored", `Duplicate ${existing.type} event ${eventId} ignored`, orderId);
     return { duplicate: true, operation: existing };
   }
+  const payableAmount = order.items.filter((item) => item.status === "reserved")
+    .reduce((sum, item) => sum + item.amount, 0);
+  if (type === "payment" && numericAmount !== payableAmount) throw storeError("Payment amount must match the remaining reserved items");
 
   const operation = {
     eventId,
     orderId,
     type,
     amount: numericAmount,
+    ...(itemId ? { itemId } : {}),
+    ...(itemIds ? { itemIds: [...itemIds] } : {}),
     status: "pending",
     at: now(),
     delayMs: delay,
@@ -578,7 +637,8 @@ function failStore(orderId, storeId, { refundDelayMs = 0 } = {}) {
   addEvent("store_failed", `Store ${storeId} became unavailable; affected amount ₹${refundAmount.toLocaleString("en-IN")}`, orderId);
   if (refundAmount > 0) {
     const eventId = id("refund");
-    processFinancialEvent({ orderId, eventId, type: "refund", amount: refundAmount, delayMs: delay });
+    const itemIds = affectedItems.filter((item) => item.status === "failed").map((item) => item.itemId);
+    processFinancialEvent({ orderId, eventId, type: "refund", amount: refundAmount, itemIds, delayMs: delay });
   }
   if (affectedItems.length > 0) {
     const issue = {
@@ -588,7 +648,9 @@ function failStore(orderId, storeId, { refundDelayMs = 0 } = {}) {
       storeName: store ? store.name : storeId,
       status: "open",
       amount: refundAmount,
-      affectedItems: affectedItems.map(({ sku, name, quantity, status, amount }) => ({ sku, name, quantity, status, amount })),
+      affectedItems: affectedItems.map(({ itemId, sku, name, quantity, status, amount }) => ({
+        itemId, sku, name, quantity, status, amount,
+      })),
       message: `Store ${store ? store.name : storeId} failed while handling this order`,
       createdAt: now(),
       resolvedAt: null,

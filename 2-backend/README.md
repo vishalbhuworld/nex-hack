@@ -24,6 +24,7 @@ Run the focused backend consistency tests with `npm test`.
 ## Roles
 
 - Customers can browse products, enter delivery details at checkout, reserve stock, and see only their own order statuses.
+- Customers can cancel one reserved or paid item at a time before dispatch. A paid item gets its own simulated refund; other items in the order stay active. Successful simulated payments generate a customer-visible confirmation code.
 - Admins can operate the store dashboard, run demo scenarios, and create staff accounts.
 - Admins can view staff accounts and customers who have signed in during the current server session.
 - Staff can view store operations, the audit timeline, and delivery details needed to fulfil orders. Admin responses contain aggregate order counts, not order or delivery details.
@@ -42,8 +43,8 @@ The API enforces these demo roles as well as hiding role-specific UI. Sessions a
 - `GET /api/orders/catalog` — customer product catalog and available quantities.
 - `GET /api/orders` — own orders for customers; full operations snapshot for admin/staff.
 - `POST /api/orders` — reserve stock for a customer order.
-- `POST /api/orders/:orderId/payment` — schedule a simulated payment event; repeated event IDs are ignored.
-- `POST /api/orders/:orderId/cancel` — cancel the caller's own customer order or an order handled by staff/admin; accepts a simulated delay.
+- `POST /api/orders/:orderId/payment` — process a simulated payment for remaining reserved items; successful payments return a confirmation code and repeated event IDs are ignored.
+- `POST /api/orders/:orderId/cancel` — cancel one item from the caller's own order using its `itemId`; a paid item records a refund for that item only.
 - `POST /api/orders/:orderId/fail-store/:storeId` — simulate a store failure; `refundDelayMs` can delay the simulated refund.
 - `POST /api/orders/:orderId/issues/:issueId/resolve` — staff marks a recovery issue reviewed.
 - Delivery name, phone, street address, city, and six-digit PIN are required for customer checkout. These details are returned only to staff; customers see their own order status and admins see aggregate counts.
