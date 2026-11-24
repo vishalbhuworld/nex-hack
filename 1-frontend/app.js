@@ -75,7 +75,6 @@ function renderOperationsSummary() {
 function renderStaffMetrics() {
   const today = new Date().toLocaleDateString();
   const isToday = (value) => value && new Date(value).toLocaleDateString() === today;
-  const demoPreview = snapshot.orders.length === 0;
   const dispatchedUnits = snapshot.orders.reduce((total, order) =>
     total + order.items.filter((item) => item.status === "dispatched")
       .reduce((quantity, item) => quantity + item.quantity, 0), 0);
@@ -92,79 +91,84 @@ function renderStaffMetrics() {
   const onlineStores = snapshot.stores.filter((store) => store.available).length;
   const todayOrderCount = snapshot.orders.filter((order) => isToday(order.createdAt)).length;
   const pendingUnits = snapshot.orderSummary.pendingUnits;
-  const orderCount = demoPreview ? 12 : snapshot.orders.length;
 
-  document.getElementById("staffTodayOrders").textContent = demoPreview ? "28" : todayOrderCount;
-  document.getElementById("staffPendingUnits").textContent = demoPreview ? "7" : pendingUnits;
-  document.getElementById("staffDispatchedUnits").textContent = demoPreview ? "15" : dispatchedUnits;
-  document.getElementById("staffRefundPending").textContent = demoPreview ? "2" : pendingRefunds;
-  document.getElementById("staffSalesToday").textContent = money(demoPreview ? 42560 : todaySales);
-  document.getElementById("staffOrderCount").textContent = orderCount;
-  document.getElementById("sidebarOrderCount").textContent = orderCount;
+  document.getElementById("staffTodayOrders").textContent = todayOrderCount;
+  document.getElementById("staffPendingUnits").textContent = pendingUnits;
+  document.getElementById("staffDispatchedUnits").textContent = dispatchedUnits;
+  document.getElementById("staffRefundPending").textContent = pendingRefunds;
+  document.getElementById("staffSalesToday").textContent = money(todaySales);
+  document.getElementById("staffOrderCount").textContent = snapshot.orders.length;
+  document.getElementById("sidebarOrderCount").textContent = snapshot.orders.length;
   document.getElementById("staffOnlineStoreCount").textContent = `${onlineStores}/${snapshot.stores.length} Online`;
   document.getElementById("staffStoreStatusChip").textContent = onlineStores === snapshot.stores.length ? "Online" : "Attention";
   document.getElementById("staffStoreStatusChip").classList.toggle("offline", onlineStores !== snapshot.stores.length);
-  document.getElementById("staffStockUnits").textContent = demoPreview ? "348" : stockUnits;
-  document.getElementById("staffLowStockCount").textContent = demoPreview ? "6" : lowStock.length;
-  document.getElementById("sidebarIssueCount").textContent = demoPreview ? "3" : (snapshot.issues || []).filter((issue) => issue.status === "open").length;
+  document.getElementById("staffStoreStatusChip").classList.remove("checking");
+  document.getElementById("staffStockUnits").textContent = stockUnits;
+  document.getElementById("staffLowStockCount").textContent = lowStock.length;
+  document.getElementById("sidebarIssueCount").textContent = (snapshot.issues || []).filter((issue) => issue.status === "open").length;
   document.getElementById("staffInventoryAlerts").innerHTML = lowStock.length
     ? lowStock.slice(0, 4).map((item) => `
       <article class="staffAlertRow"><span class="staffAlertProduct">⬡</span><span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.storeName)} · ${item.available} available</small></span><b class="restockLabel">Low</b></article>`).join("")
     : `<p class="staffNoAlerts">No low-stock items (threshold: 2 available or fewer).</p>`;
-  renderStaffInsights(demoPreview);
+  renderStaffInsights();
 }
 
-function renderStaffInsights(demoPreview) {
-  const orderCounts = demoPreview
-    ? [3, 10, 17, 18, 26, 20, 30]
-    : Array.from({ length:7 }, (_, index) => {
-      const hour = 9 + index * 2;
-      return snapshot.orders.filter((order) => {
-        const createdAt = new Date(order.createdAt);
-        return createdAt.toLocaleDateString() === new Date().toLocaleDateString()
-          && createdAt.getHours() >= hour && createdAt.getHours() < hour + 2;
-      }).length;
-    });
+function renderStaffInsights() {
+  const today = new Date().toLocaleDateString();
+  const timeBins = [
+    { start:0, end:4, label:"12 AM" },
+    { start:4, end:8, label:"4 AM" },
+    { start:8, end:12, label:"8 AM" },
+    { start:12, end:16, label:"12 PM" },
+    { start:16, end:20, label:"4 PM" },
+    { start:20, end:24, label:"8 PM" },
+  ];
+  const orderCounts = timeBins.map(({ start, end }) => snapshot.orders.filter((order) => {
+    const createdAt = new Date(order.createdAt);
+    return createdAt.toLocaleDateString() === today && createdAt.getHours() >= start && createdAt.getHours() < end;
+  }).length);
   const maxOrders = Math.max(...orderCounts, 1);
-  const labels = ["9 AM", "11 AM", "1 PM", "3 PM", "5 PM", "7 PM", "9 PM"];
-  document.getElementById("staffChartLabel").textContent = demoPreview ? "Demo preview" : "Today · live orders";
+  const chartScale = Math.max(10, Math.ceil(maxOrders / 4) * 4);
+  const chartStep = chartScale / 4;
+  const labels = timeBins.map((bin) => bin.label);
+  const hasTodayOrders = orderCounts.some((count) => count > 0);
+  document.getElementById("staffChartLabel").textContent = hasTodayOrders ? "Today · live orders" : "No orders today";
   const points = orderCounts.map((count, index) => {
-    const x = 34 + index * 48;
-    const y = 102 - Math.min(count / maxOrders, 1) * 78;
+    const x = 34 + index * (288 / (orderCounts.length - 1));
+    const y = 102 - Math.min(count / chartScale, 1) * 78;
     return { x, y, count };
   });
   const pointList = points.map((point) => `${point.x},${point.y}`).join(" ");
-  document.getElementById("staffOrderFlow").innerHTML = `
+  document.getElementById("staffOrderFlow").innerHTML = hasTodayOrders ? `
     <svg viewBox="0 0 370 132" role="img" aria-label="Today's order flow chart">
       <defs><linearGradient id="orderAreaFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#0b70ed" stop-opacity=".22"/><stop offset="1" stop-color="#0b70ed" stop-opacity=".02"/></linearGradient></defs>
       <g class="chartGrid">${[24, 44, 64, 84, 104].map((y) => `<line x1="28" y1="${y}" x2="348" y2="${y}"/>`).join("")}</g>
-      <g class="chartAxis">${[40, 30, 20, 10, 0].map((value, index) => `<text x="4" y="${27 + index * 20}">${value}</text>`).join("")}</g>
-      <polygon class="chartArea" points="34,104 ${pointList} 322,104"/>
+      <g class="chartAxis">${[4, 3, 2, 1, 0].map((step, index) => `<text x="4" y="${27 + index * 20}">${Math.round(chartStep * step)}</text>`).join("")}</g>
+      <polygon class="chartArea" points="34,104 ${pointList} ${points[points.length - 1].x},104"/>
       <polyline class="chartLine" points="${pointList}"/>
       <g class="chartPoints">${points.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="2.7"><title>${point.count} orders</title></circle>`).join("")}</g>
-      <g class="chartAxis chartTime">${labels.map((label, index) => `<text x="${34 + index * 48}" y="126">${label}</text>`).join("")}</g>
-    </svg>`;
+      <g class="chartAxis chartTime">${labels.map((label, index) => `<text x="${34 + index * (288 / (labels.length - 1))}" y="126">${label}</text>`).join("")}</g>
+    </svg>` : `<p class="staffNoChartData">No order data recorded today.</p>`;
 
   const items = snapshot.orders.flatMap((order) => order.items);
   const totalUnits = items.reduce((total, item) => total + item.quantity, 0);
   const dispatched = items.filter((item) => item.status === "dispatched").reduce((total, item) => total + item.quantity, 0);
   const pending = items.filter((item) => ["reserved", "paid"].includes(item.status)).reduce((total, item) => total + item.quantity, 0);
-  const resolved = Math.max(0, totalUnits - dispatched - pending);
-  const percentages = demoPreview
-    ? [72, 18, 10]
-    : totalUnits
-      ? [Math.round(dispatched / totalUnits * 100), Math.round(pending / totalUnits * 100), Math.round(resolved / totalUnits * 100)]
-      : [0, 0, 0];
-  const fulfilledRate = demoPreview ? 72 : percentages[0];
+  const dispatchedPercentage = totalUnits ? Math.round(dispatched / totalUnits * 100) : 0;
+  const pendingPercentage = totalUnits
+    ? Math.min(Math.round(pending / totalUnits * 100), 100 - dispatchedPercentage)
+    : 0;
+  const percentages = [dispatchedPercentage, pendingPercentage, totalUnits ? 100 - dispatchedPercentage - pendingPercentage : 0];
+  const fulfilledRate = percentages[0];
   document.getElementById("staffFulfilmentRate").textContent = `${fulfilledRate}%`;
   document.getElementById("staffFulfilmentSummary").innerHTML = `
     <div class="fulfilmentDonut" style="--fulfilled:${percentages[0]}%;--in-progress:${percentages[0] + percentages[1]}%">
-      <span><b>${fulfilledRate}%</b><small>${demoPreview ? "Fulfilled" : "Dispatched"}</small></span>
+      <span><b>${fulfilledRate}%</b><small>${totalUnits ? "Dispatched" : "No data"}</small></span>
     </div>
     <div class="fulfilmentLegend">
-      <div><i class="legendGreen"></i><span>${demoPreview ? "Fulfilled" : "Dispatched"}</span><b>${demoPreview ? "72%" : `${percentages[0]}%`}</b></div>
-      <div><i class="legendBlue"></i><span>In Progress</span><b>${demoPreview ? "18%" : `${percentages[1]}%`}</b></div>
-      <div><i class="legendGold"></i><span>Pending</span><b>${demoPreview ? "10%" : `${percentages[2]}%`}</b></div>
+      <div><i class="legendGreen"></i><span>Dispatched</span><b>${percentages[0]}%</b></div>
+      <div><i class="legendBlue"></i><span>In Progress</span><b>${percentages[1]}%</b></div>
+      <div><i class="legendGold"></i><span>Other</span><b>${percentages[2]}%</b></div>
     </div>`;
 }
 
@@ -248,30 +252,14 @@ function renderStores() {
 
 function renderOrders() {
   const storeNames = Object.fromEntries(snapshot.stores.map((store) => [store.id, store.name]));
-  const sampleOrders = [
-    { id:"VX10456", customer:"Rohit Sharma", items:"2 Items", amount:1899, status:"Pending Packing", state:"pending" },
-    { id:"VX10455", customer:"Ananya Verma", items:"1 Item", amount:799, status:"Pending Packing", state:"pending" },
-    { id:"VX10453", customer:"Karan Bisht", items:"3 Items", amount:2499, status:"Ready to Ship", state:"ready" },
-    { id:"VX10451", customer:"Sneha Pandey", items:"2 Items", amount:1299, status:"Ready to Ship", state:"ready" },
-    { id:"VX10450", customer:"Aman Rawat", items:"1 Item", amount:699, status:"Awaiting Stock", state:"stock" },
-  ];
-  const demoPreview = snapshot.orders.length === 0;
-  document.getElementById("orderBadge").textContent = demoPreview ? "DEMO · 5 of 12" : `${snapshot.orders.length} orders`;
-  document.getElementById("staffOrdersHint").textContent = demoPreview
-    ? "Demo preview · live orders replace these rows when available."
-    : "Orders that need packing, stock update or dispatch.";
-  document.getElementById("orders").innerHTML = demoPreview
-    ? sampleOrders.map((order) => `
-      <article class="staffOrderRow" role="row">
-        <b class="staffOrderId">#${order.id}</b><span>${order.customer}</span><span>${order.items}</span><b>${money(order.amount)}</b>
-        <span><b class="staffOrderStatus ${order.state}">${order.status}</b></span>
-        <button class="staffRowAction ${order.state}" disabled>${order.state === "ready" ? "Dispatch" : order.state === "stock" ? "Update Stock" : "Process"} <span>→</span></button>
-      </article>`).join("")
-    : snapshot.orders.map((order) => {
+  document.getElementById("orderBadge").textContent = `${snapshot.orders.length} order${snapshot.orders.length === 1 ? "" : "s"}`;
+  document.getElementById("staffOrdersHint").textContent = "Live orders across your stores.";
+  document.getElementById("orders").innerHTML = snapshot.orders.length
+    ? snapshot.orders.map((order) => {
       const itemCount = order.items.reduce((total, item) => total + item.quantity, 0);
       const orderStatus = order.items.some((item) => item.status === "failed")
-        ? { label:"Awaiting Stock", state:"stock" }
-        : order.status === "reserved" ? { label:"Pending Packing", state:"pending" }
+        ? { label:"Recovery Needed", state:"stock" }
+        : order.status === "reserved" ? { label:"Awaiting Payment", state:"pending" }
           : order.status === "paid" ? { label:"Ready to Ship", state:"ready" }
             : order.status === "partially_fulfilled" ? { label:"In Progress", state:"ready" }
               : order.status === "fulfilled" ? { label:"Fulfilled", state:"complete" }
@@ -294,7 +282,8 @@ function renderOrders() {
             ${order.items.filter((item) => item.status === "paid").map((item) => `<button data-fail="${escapeHtml(order.id)}|${escapeHtml(item.storeId)}">Mark ${escapeHtml(item.storeId)} unavailable</button>`).join("")}
           </div></details>
         </article>`;
-    }).join("");
+    }).join("")
+    : `<p class="staffNoOrders">No orders have been placed yet.</p>`;
   document.querySelectorAll("[data-payment]").forEach((button) => button.onclick = async () => {
     try {
       const eventId = `payment-${button.dataset.payment}-demo`;
@@ -321,7 +310,7 @@ function renderOrders() {
 function renderTimeline() {
   const openIssues = (snapshot.issues || []).filter((issue) => issue.status === "open");
   document.getElementById("issueCount").textContent = `${openIssues.length} open issue${openIssues.length === 1 ? "" : "s"}`;
-  document.getElementById("sidebarIssueCount").textContent = openIssues.length || (snapshot.orders.length === 0 ? 3 : 0);
+  document.getElementById("sidebarIssueCount").textContent = openIssues.length;
   document.getElementById("recoveryIssues").innerHTML = openIssues.length ? openIssues.map((issue) => `
     <article class="recoveryIssue">
       <b>${escapeHtml(issue.message)}</b>
