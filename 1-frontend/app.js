@@ -286,12 +286,13 @@ function renderOrders() {
         <span>${escapeHtml(item.name)} ×${item.quantity} · ${escapeHtml(storeNames[item.storeId] || item.storeId)} · ${escapeHtml(item.status)}</span>`).join("");
       return `
         <article class="staffOrderRow" role="row">
-          <div class="staffOrderId">#${escapeHtml(order.id)}<details class="staffRowDetails"><summary>Items &amp; delivery</summary><div>${details}
-            ${order.deliveryDetails ? `<p><b>Deliver to:</b> ${escapeHtml(order.deliveryDetails.fullName)} · ${escapeHtml(order.deliveryDetails.phone)}<br>${escapeHtml(order.deliveryDetails.address)}, ${escapeHtml(order.deliveryDetails.city)} ${escapeHtml(order.deliveryDetails.pincode)}</p>` : ""}
-            ${order.items.filter((item) => item.status === "paid").map((item) => `<button data-fail="${escapeHtml(order.id)}|${escapeHtml(item.storeId)}">Mark ${escapeHtml(item.storeId)} unavailable</button>`).join("")}
-          </div></details></div>
+          <div class="staffOrderId">#${escapeHtml(order.id)}</div>
           <span>${escapeHtml(order.customer)}</span><span>${itemCount} ${itemCount === 1 ? "Item" : "Items"}</span><b>${money(order.total)}</b>
           <span><b class="staffOrderStatus ${orderStatus.state}">${escapeHtml(orderStatus.label)}</b></span><div class="staffRowActions">${actions}</div>
+          <details class="staffRowDetails"><summary>Items &amp; delivery</summary><div>${details}
+            ${order.deliveryDetails ? `<p><b>Deliver to:</b> ${escapeHtml(order.deliveryDetails.fullName)} · ${escapeHtml(order.deliveryDetails.phone)}<br>${escapeHtml(order.deliveryDetails.address)}, ${escapeHtml(order.deliveryDetails.city)} ${escapeHtml(order.deliveryDetails.pincode)}</p>` : ""}
+            ${order.items.filter((item) => item.status === "paid").map((item) => `<button data-fail="${escapeHtml(order.id)}|${escapeHtml(item.storeId)}">Mark ${escapeHtml(item.storeId)} unavailable</button>`).join("")}
+          </div></details>
         </article>`;
     }).join("");
   document.querySelectorAll("[data-payment]").forEach((button) => button.onclick = async () => {

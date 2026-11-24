@@ -168,8 +168,8 @@
               <div><h2>Pending Orders</h2><p id="staffOrdersHint">Orders that need packing, stock update or dispatch.</p></div>
               <div class="staffOrderHeaderActions"><button id="staffRefreshOrders" class="staffRefreshButton" aria-label="Refresh orders">↻</button><span id="orderBadge"></span></div>
             </div>
-            <div class="staffOrderTable">
-              <div class="staffOrdersHeader"><span>Order ID</span><span>Customer</span><span>Items</span><span>Amount</span><span>Status</span><span>Action</span></div>
+            <div class="staffOrderTable" role="table" aria-label="Staff orders">
+              <div class="staffOrdersHeader" role="row"><span role="columnheader">Order ID</span><span role="columnheader">Customer</span><span role="columnheader">Items</span><span role="columnheader">Amount</span><span role="columnheader">Status</span><span role="columnheader">Action</span></div>
               <div id="orders" class="orders"></div>
             </div>
           </div>

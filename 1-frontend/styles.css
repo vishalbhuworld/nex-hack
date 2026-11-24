@@ -362,6 +362,7 @@ body.authenticated[data-role="staff"] .orders { display:grid; gap:0; }
 body.authenticated[data-role="staff"] .staffOrderRow { min-height:39px; border-bottom:1px solid #edf0f5; color:#19263c; font-size:11px; }
 body.authenticated[data-role="staff"] .staffOrderRow:last-child { border-bottom:0; }
 body.authenticated[data-role="staff"] .staffOrderId { font-weight:800; white-space:nowrap; }
+body.authenticated[data-role="staff"] .staffRowActions { display:flex; flex-wrap:wrap; gap:4px; }
 body.authenticated[data-role="staff"] .staffOrderStatus { display:inline-block; padding:5px 8px; border-radius:14px; background:#fff2d6; color:#b97600; font-size:10px; white-space:nowrap; }
 body.authenticated[data-role="staff"] .staffOrderStatus.ready { background:#dff0ff; color:#0870da; }
 body.authenticated[data-role="staff"] .staffOrderStatus.stock { background:#ffe3e6; color:#d83245; }
