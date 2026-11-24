@@ -712,6 +712,16 @@ function processFinancialEvent({ orderId, eventId, type, amount, itemId, itemIds
 }
 
 function dispatchStore(orderId, storeId) {
+  const fulfilmentStore = state.stores.find(
+    entry => entry.id === storeId
+  );
+
+  if (!fulfilmentStore || !fulfilmentStore.available) {
+    throw storeError(
+      "Store unavailable. Use recovery or refund options.",
+      409
+    );
+  }
   const order = state.orders[orderId];
   if (!order) throw new Error("Unknown order");
   let changed = false;
@@ -838,7 +848,400 @@ async function runConcurrencyDemo() {
   return { responses, snapshot };
 }
 
+
+function findAlternativeStores(orderId, itemId) {
+  const order = state.orders[orderId];
+
+  if (!order) {
+    throw storeError("Unknown order", 404);
+  }
+
+  const item = order.items.find(i => i.itemId === itemId);
+
+  if (!item) {
+    throw storeError("Unknown item", 404);
+  }
+
+  if (!["paid", "recovery_pending"].includes(item.status)) {
+    return [];
+  }
+
+  return state.stores
+    .filter(s =>
+      s.id !== item.storeId &&
+      s.available &&
+      availableStock(s.id, item.sku) >= item.quantity
+    )
+    .map(s => ({
+      storeId: s.id,
+      name: s.name,
+      sku: item.sku,
+      available: availableStock(s.id, item.sku),
+      quantity: item.quantity,
+      amount: item.amount
+    }))
+    .sort((a, b) => b.available - a.available);
+}
+
+
+function switchStore({
+  orderId,
+  itemId,
+  targetStoreId,
+  customerEmail,
+  paymentCode
+}) {
+  const order = state.orders[orderId];
+
+  if (!order) {
+    throw storeError("Unknown order", 404);
+  }
+
+  if (!customerEmail || order.customerEmail !== customerEmail) {
+    throw storeError("Unauthorized order", 403);
+  }
+
+  if (!order.paymentCode ||
+      order.paymentCode !== paymentCode) {
+    throw storeError("Invalid payment code", 403);
+  }
+
+  const item = order.items.find(i => i.itemId === itemId);
+
+  if (!item || item.status !== "paid") {
+    throw storeError("Only paid and undispatched items can switch stores", 409);
+  }
+
+  if (item.storeId === targetStoreId) {
+    throw storeError("Item already belongs to this store", 409);
+  }
+
+  const pendingOperation = Object.values(state.financial).some(op =>
+    op.orderId === orderId &&
+    op.status === "pending"
+  );
+
+  if (pendingOperation) {
+    throw storeError("Financial operation pending", 409);
+  }
+
+  const alternatives = findAlternativeStores(orderId, itemId);
+  const target = alternatives.find(s => s.storeId === targetStoreId);
+
+  if (!target) {
+    throw storeError("Alternative store stock unavailable", 409);
+  }
+
+  const previousStoreId = item.storeId;
+
+  state.inventory[targetStoreId][item.sku] -= item.quantity;
+  state.inventory[previousStoreId][item.sku] += item.quantity;
+
+  item.storeId = targetStoreId;
+
+  addEvent(
+    "store_switched",
+    `Item ${item.name} switched from ${previousStoreId} to ${targetStoreId}`,
+    orderId,
+    {
+      itemId,
+      previousStoreId,
+      targetStoreId,
+      quantity: item.quantity,
+      amount: item.amount
+    }
+  );
+
+  return serializeOrder(order);
+}
+
+
+function getRecoveryOptions(orderId, storeId) {
+  const order = state.orders[orderId];
+
+  if (!order) {
+    throw storeError("Unknown order", 404);
+  }
+
+  const affectedItems = order.items.filter(
+    item => item.storeId === storeId &&
+            item.status === "paid"
+  );
+
+  return affectedItems.map(item => {
+    const alternatives = findAlternativeStores(
+      orderId, item.itemId
+    );
+
+    return {
+      itemId: item.itemId,
+      product: item.name,
+      quantity: item.quantity,
+      refundAmount: item.amount,
+      alternatives,
+      canSwitch: alternatives.length > 0
+    };
+  });
+}
+
+
+function prepareStoreRecovery(orderId, storeId) {
+  const order = state.orders[orderId];
+
+  if (!order) {
+    throw storeError("Unknown order", 404);
+  }
+
+  const pending = Object.values(state.financial).some(
+    op => op.orderId === orderId &&
+          op.status === "pending"
+  );
+
+  if (pending) {
+    throw storeError("Financial operation pending", 409);
+  }
+
+  const options = getRecoveryOptions(orderId, storeId);
+
+  if (!options.length) {
+    throw storeError("No eligible paid items", 409);
+  }
+
+  return {
+    orderId,
+    storeId,
+    status: "recovery_available",
+    options,
+    additionalPayment: 0,
+    requiresCustomerApproval: true
+  };
+}
+
+
+function startStoreRecovery(orderId, storeId) {
+  const order = state.orders[orderId];
+
+  if (!order) {
+    throw storeError("Unknown order", 404);
+  }
+
+  const failedStore = state.stores.find(
+    s => s.id === storeId
+  );
+
+  if (!failedStore) {
+    throw storeError("Unknown store", 404);
+  }
+
+  const held = order.items.filter(
+    i => i.storeId === storeId &&
+         i.status === "recovery_pending"
+  );
+
+  if (held.length) {
+    return serializeOrder(order);
+  }
+
+  const preparation = prepareStoreRecovery(
+    orderId, storeId
+  );
+
+  failedStore.available = false;
+
+  for (const option of preparation.options) {
+    const item = order.items.find(
+      i => i.itemId === option.itemId
+    );
+
+    if (option.canSwitch) {
+      item.status = "recovery_pending";
+      item.recoveryExpiresAt =
+        new Date(Date.now() + 300000).toISOString();
+
+      addEvent(
+        "recovery_started",
+        `Recovery offered for ${item.name}`,
+        orderId
+      );
+    } else {
+      item.status = "failed";
+
+      processFinancialEvent({
+        orderId,
+        eventId: id("refund"),
+        type: "refund",
+        amount: item.amount,
+        itemIds: [item.itemId]
+      });
+    }
+  }
+
+  updateOrderStatus(order);
+
+  return serializeOrder(order);
+}
+
+
+function resolveStoreRecovery({
+  orderId,
+  itemId,
+  customerEmail,
+  paymentCode,
+  action,
+  targetStoreId
+}) {
+  const order = state.orders[orderId];
+
+  if (!order || order.customerEmail !== customerEmail) {
+    throw storeError("Order access denied", 403);
+  }
+
+  if (!order.paymentCode ||
+      order.paymentCode !== paymentCode) {
+    throw storeError("Invalid payment code", 403);
+  }
+
+  const item = order.items.find(
+    i => i.itemId === itemId
+  );
+
+  if (!item || item.status !== "recovery_pending") {
+    throw storeError("No pending recovery", 409);
+  }
+
+  if (!["switch", "refund"].includes(action)) {
+    throw storeError("Invalid recovery action", 400);
+  }
+
+  if (action === "switch") {
+    if (Date.now() >= Date.parse(item.recoveryExpiresAt)) {
+      throw storeError("Recovery window expired", 409);
+    }
+
+    item.status = "paid";
+
+    try {
+      switchStore({
+        orderId,
+        itemId,
+        targetStoreId,
+        customerEmail,
+        paymentCode
+      });
+    } catch (error) {
+      item.status = "recovery_pending";
+      throw error;
+    }
+
+    addEvent(
+      "recovery_switched",
+      `Recovery successful for ${item.name}`,
+      orderId
+    );
+
+  } else {
+    item.status = "failed";
+
+    processFinancialEvent({
+      orderId,
+      eventId: id("refund"),
+      type: "refund",
+      amount: item.amount,
+      itemIds: [itemId]
+    });
+
+    addEvent(
+      "recovery_refunded",
+      `Recovery refund for ${item.name}`,
+      orderId
+    );
+  }
+
+  delete item.recoveryExpiresAt;
+
+  updateOrderStatus(order);
+
+  return serializeOrder(order);
+}
+
+
+function expirePendingRecoveries() {
+  let changed = false;
+
+  for (const order of Object.values(state.orders)) {
+    for (const item of order.items) {
+
+      if (item.status !== "recovery_pending") {
+        continue;
+      }
+
+      const deadline = Date.parse(item.recoveryExpiresAt);
+
+      if (!Number.isFinite(deadline) ||
+          Date.now() < deadline) {
+        continue;
+      }
+
+      item.status = "failed";
+
+      try {
+        const result = processFinancialEvent({
+          orderId: order.id,
+          eventId: id("recovery-refund"),
+          type: "refund",
+          amount: item.amount,
+          itemIds: [item.itemId]
+        });
+
+        if (result.operation.status !== "applied") {
+          item.status = "recovery_pending";
+          continue;
+        }
+
+        delete item.recoveryExpiresAt;
+
+        addEvent(
+          "recovery_expired",
+          `Recovery expired for ${item.name}. Refund applied.`,
+          order.id
+        );
+
+        updateOrderStatus(order);
+        changed = true;
+
+      } catch (error) {
+        if (item.status === "failed") {
+          item.status = "recovery_pending";
+        }
+
+        console.error("Recovery expiry error:", error.message);
+      }
+    }
+  }
+
+  return changed;
+}
+
+const recoveryTimer = setInterval(() => {
+  try {
+    if (expirePendingRecoveries()) {
+      flushInBackground();
+    }
+  } catch (error) {
+    console.error("Recovery worker error:", error.message);
+  }
+}, 10000);
+
+recoveryTimer.unref();
+
 module.exports = {
+  expirePendingRecoveries,
+  resolveStoreRecovery,
+  startStoreRecovery,
+  prepareStoreRecovery,
+  getRecoveryOptions,
+  switchStore,
+  findAlternativeStores,
   initializePersistence,
   flush,
   createOrder,
