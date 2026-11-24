@@ -199,6 +199,7 @@ function renderProducts() {
 }
 
 function renderCustomerOrders() {
+  queueMicrotask(attachCustomerRecoveryButtons);
   const target = document.getElementById("customerOrders");
   target.innerHTML = snapshot.orders.length ? snapshot.orders.map((order) => `
     <article class="orderCard">
@@ -374,6 +375,7 @@ function renderStores() {
 }
 
 function renderOrders() {
+  queueMicrotask(attachSmartRecoveryButtons);
   const storeNames = Object.fromEntries(snapshot.stores.map((store) => [store.id, store.name]));
   document.getElementById("orderBadge").textContent = `${snapshot.orders.length} order${snapshot.orders.length === 1 ? "" : "s"}`;
   document.getElementById("staffOrdersHint").textContent = "Live orders across your stores.";
@@ -835,5 +837,173 @@ function attachStoreSwitchButtons() {
     };
 
     parent.appendChild(button);
+  });
+}
+
+
+function attachSmartRecoveryButtons() {
+  document.querySelectorAll("[data-fail]").forEach(original => {
+    const parent = original.parentElement;
+
+    const existing = [...parent.querySelectorAll("[data-smart-recovery]")]
+      .find(b => b.dataset.smartRecovery === original.dataset.fail);
+
+    if (existing) return;
+
+    const button = document.createElement("button");
+
+    button.type = "button";
+    button.dataset.smartRecovery = original.dataset.fail;
+    button.textContent = "Start Smart Recovery";
+
+    button.style.cssText =
+      "background:#2563eb;color:white;border:0;border-radius:8px;padding:10px 15px;margin:5px;cursor:pointer;font-weight:600;";
+
+    button.onclick = async () => {
+      const [orderId, storeId] =
+        button.dataset.smartRecovery.split("|");
+
+      if (!window.confirm(
+        "Start smart recovery? Customers may choose another store or receive a demo refund."
+      )) return;
+
+      button.disabled = true;
+
+      try {
+        await api(
+          `/api/orders/${encodeURIComponent(orderId)}/recovery/start/${encodeURIComponent(storeId)}`,
+          { method: "POST" }
+        );
+
+        toast("Smart Recovery started");
+        await load();
+
+      } catch (error) {
+        toast(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    };
+
+    original.insertAdjacentElement("afterend", button);
+  });
+}
+
+
+function attachCustomerRecoveryButtons() {
+  if (currentUser?.role !== "customer") return;
+
+  const cards = document.querySelectorAll(
+    "#customerOrders .orderCard"
+  );
+
+  snapshot.orders.forEach((order, index) => {
+    const card = cards[index];
+    if (!card) return;
+
+    order.items.filter(
+      item => item.status === "recovery_pending"
+    ).forEach(item => {
+
+      const panel = document.createElement("div");
+
+      panel.style.cssText =
+        "border:1px solid #f59e0b;border-radius:12px;padding:15px;margin:12px 0;";
+
+      panel.innerHTML = `
+        <h3>Smart Order Recovery</h3>
+        <p>${escapeHtml(item.name)} - Store unavailable</p>
+        <p>Refund amount: ${money(item.amount)}</p>
+        <p>Deadline: ${escapeHtml(new Date(item.recoveryExpiresAt).toLocaleString())}</p>
+        <p>No additional payment required for switching.</p>
+      `;
+
+      ["switch", "refund"].forEach(action => {
+        const button = document.createElement("button");
+
+        button.type = "button";
+        button.textContent = action === "switch"
+          ? "Switch Store"
+          : "Get Demo Refund";
+
+        button.style.cssText =
+          `background:${action === "switch" ? "#2563eb" : "#16a34a"};color:white;border:0;border-radius:8px;padding:10px 15px;margin:5px;cursor:pointer;`;
+
+        button.onclick = async () => {
+          const paymentCode = window.prompt(
+            "Enter your unique order code"
+          )?.trim();
+
+          if (!paymentCode) return;
+
+          button.disabled = true;
+
+          try {
+            let targetStoreId;
+
+            if (action === "switch") {
+              const data = await api(
+                `/api/orders/${encodeURIComponent(order.id)}/alternatives/${encodeURIComponent(item.itemId)}`
+              );
+
+              const stores = data.alternatives || [];
+
+              if (!stores.length) {
+                return toast("No alternative stock available");
+              }
+
+              const choices = stores.map((s, i) =>
+                `${i + 1}. ${s.name} - Stock: ${s.available}`
+              ).join("\n");
+
+              const answer = window.prompt(
+                "Select alternative store:\n" + choices
+              );
+
+              if (answer === null) return;
+
+              const selected = Number(answer) - 1;
+
+              if (!Number.isInteger(selected) || !stores[selected]) {
+                return toast("Invalid store selection");
+              }
+
+              targetStoreId = stores[selected].storeId;
+            }
+
+            if (!window.confirm(
+              action === "switch"
+                ? "Confirm store switching?"
+                : "Confirm simulated refund?"
+            )) return;
+
+            await api(
+              `/api/orders/${encodeURIComponent(order.id)}/recovery/resolve`,
+              {
+                method: "POST",
+                body: JSON.stringify({
+                  itemId: item.itemId,
+                  paymentCode,
+                  action,
+                  targetStoreId
+                })
+              }
+            );
+
+            toast("Recovery completed successfully");
+            await load();
+
+          } catch (error) {
+            toast(error.message);
+          } finally {
+            button.disabled = false;
+          }
+        };
+
+        panel.appendChild(button);
+      });
+
+      card.appendChild(panel);
+    });
   });
 }

@@ -17,7 +17,7 @@ router.get("/", auth.authenticate, async (req, res, next) => {
           id: order.id,
           status: order.status,
           total: order.total,
-          paidTotal: order.items.filter((item) => ["paid", "dispatched"].includes(item.status))
+          paidTotal: order.items.filter((item) => ["paid", "dispatched", "recovery_pending"].includes(item.status))
             .reduce((sum, item) => sum + item.amount, 0),
           refundTotal: order.items.filter((item) => item.status === "refunded")
             .reduce((sum, item) => sum + item.amount, 0),
@@ -27,7 +27,7 @@ router.get("/", auth.authenticate, async (req, res, next) => {
             ? order.paymentAttempts.at(-1).reviewNote || ""
             : "",
           createdAt: order.createdAt,
-          items: order.items.map(({ itemId, name, quantity, status, amount, storeId }) => ({
+          items: order.items.map(({ itemId, name, quantity, status, amount, storeId, recoveryExpiresAt }) => ({
             itemId,
             name,
             quantity,
@@ -35,11 +35,12 @@ router.get("/", auth.authenticate, async (req, res, next) => {
             amount,
             storeId,
             storeName: storeNames[storeId] || storeId,
+            recoveryExpiresAt: recoveryExpiresAt || null,
           })),
         })),
       });
     }
-    const pendingStatuses = new Set(["reserved", "paid"]);
+    const pendingStatuses = new Set(["reserved", "paid", "recovery_pending"]);
     const orderSummary = {
       totalOrders: snapshot.orders.length,
       pendingOrders: snapshot.orders.filter((order) => ["reserved", "paid", "partially_fulfilled"].includes(order.status)).length,
@@ -393,6 +394,54 @@ router.get("/:orderId/recovery/:storeId",
         recoveryOptions
       });
 
+    } catch (error) {
+      next(error);
+    }
+});
+
+
+router.post("/:orderId/recovery/start/:storeId",
+  auth.authenticate,
+  auth.allowRoles("admin", "staff"),
+  async (req, res, next) => {
+    try {
+      const order = store.startStoreRecovery(
+        req.params.orderId,
+        req.params.storeId
+      );
+
+      await store.flush();
+
+      res.json({
+        success: true,
+        message: "Smart recovery started",
+        order
+      });
+    } catch (error) {
+      next(error);
+    }
+});
+
+router.post("/:orderId/recovery/resolve",
+  auth.authenticate,
+  auth.allowRoles("customer"),
+  async (req, res, next) => {
+    try {
+      store.resolveStoreRecovery({
+        orderId: req.params.orderId,
+        itemId: req.body.itemId,
+        customerEmail: req.user.email,
+        paymentCode: req.body.paymentCode,
+        action: req.body.action,
+        targetStoreId: req.body.targetStoreId
+      });
+
+      await store.flush();
+
+      res.json({
+        success: true,
+        message: "Recovery resolved successfully"
+      });
     } catch (error) {
       next(error);
     }
