@@ -712,6 +712,16 @@ function processFinancialEvent({ orderId, eventId, type, amount, itemId, itemIds
 }
 
 function dispatchStore(orderId, storeId) {
+  const fulfilmentStore = state.stores.find(
+    entry => entry.id === storeId
+  );
+
+  if (!fulfilmentStore || !fulfilmentStore.available) {
+    throw storeError(
+      "Store unavailable. Use recovery or refund options.",
+      409
+    );
+  }
   const order = state.orders[orderId];
   if (!order) throw new Error("Unknown order");
   let changed = false;
@@ -945,7 +955,71 @@ function switchStore({
   return serializeOrder(order);
 }
 
+
+function getRecoveryOptions(orderId, storeId) {
+  const order = state.orders[orderId];
+
+  if (!order) {
+    throw storeError("Unknown order", 404);
+  }
+
+  const affectedItems = order.items.filter(
+    item => item.storeId === storeId &&
+            item.status === "paid"
+  );
+
+  return affectedItems.map(item => {
+    const alternatives = findAlternativeStores(
+      orderId, item.itemId
+    );
+
+    return {
+      itemId: item.itemId,
+      product: item.name,
+      quantity: item.quantity,
+      refundAmount: item.amount,
+      alternatives,
+      canSwitch: alternatives.length > 0
+    };
+  });
+}
+
+
+function prepareStoreRecovery(orderId, storeId) {
+  const order = state.orders[orderId];
+
+  if (!order) {
+    throw storeError("Unknown order", 404);
+  }
+
+  const pending = Object.values(state.financial).some(
+    op => op.orderId === orderId &&
+          op.status === "pending"
+  );
+
+  if (pending) {
+    throw storeError("Financial operation pending", 409);
+  }
+
+  const options = getRecoveryOptions(orderId, storeId);
+
+  if (!options.length) {
+    throw storeError("No eligible paid items", 409);
+  }
+
+  return {
+    orderId,
+    storeId,
+    status: "recovery_available",
+    options,
+    additionalPayment: 0,
+    requiresCustomerApproval: true
+  };
+}
+
 module.exports = {
+  prepareStoreRecovery,
+  getRecoveryOptions,
   switchStore,
   findAlternativeStores,
   initializePersistence,

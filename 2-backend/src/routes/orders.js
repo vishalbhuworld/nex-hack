@@ -358,4 +358,44 @@ router.post("/:orderId/switch-store",
     }
 });
 
+
+router.get("/:orderId/recovery/:storeId",
+  auth.authenticate,
+  auth.allowRoles("customer", "admin", "staff"),
+  async (req, res, next) => {
+    try {
+      const order = store.getSnapshot().orders.find(
+        o => o.id === req.params.orderId
+      );
+
+      if (!order) {
+        return res.status(404).json({
+          error: "Order not found"
+        });
+      }
+
+      if (
+        req.user.role === "customer" &&
+        order.customerEmail !== req.user.email
+      ) {
+        return res.status(403).json({
+          error: "Order access denied"
+        });
+      }
+
+      const recoveryOptions = store.getRecoveryOptions(
+        req.params.orderId,
+        req.params.storeId
+      );
+
+      res.json({
+        orderId: order.id,
+        recoveryOptions
+      });
+
+    } catch (error) {
+      next(error);
+    }
+});
+
 module.exports = router;
