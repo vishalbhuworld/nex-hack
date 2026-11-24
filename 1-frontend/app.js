@@ -317,7 +317,7 @@ function renderPaymentVerification() {
         ${["pending", "hold"].includes(submission.status) ? `
           <label class="paymentReviewNote">Review note <span class="optional">(required to reject)</span><input data-review-note maxlength="300"></label>
           <div class="paymentReviewActions">
-            <button type="button" class="primary" data-payment-decision="approve" data-order="${escapeHtml(submission.orderId)}" data-submission="${escapeHtml(submission.submissionId)}">Approve &amp; generate code</button>
+            <button type="button" class="primary" data-payment-decision="approve" data-order="${escapeHtml(submission.orderId)}" data-submission="${escapeHtml(submission.submissionId)}">Received payment · generate code</button>
             <button type="button" class="paymentRejectButton" data-payment-decision="reject" data-order="${escapeHtml(submission.orderId)}" data-submission="${escapeHtml(submission.submissionId)}">Reject</button>
             ${submission.status === "pending" ? `<button type="button" class="paymentHoldButton" data-payment-decision="hold" data-order="${escapeHtml(submission.orderId)}" data-submission="${escapeHtml(submission.submissionId)}">Hold</button>` : ""}
           </div>` : ""}
@@ -330,14 +330,14 @@ function renderPaymentVerification() {
       const decision = button.dataset.paymentDecision;
       const note = card.querySelector("[data-review-note]")?.value.trim() || "";
       if (decision === "reject" && note.length < 3) return toast("Add a short reason before rejecting a payment");
-      if (decision === "approve" && !window.confirm("Verify this UTR in your UPI/bank app before approving. Continue?")) return;
+      if (decision === "approve" && !window.confirm("Verify this UTR in your UPI/bank app, then confirm payment received to generate this order's code. Continue?")) return;
       try {
         const result = await api(`/api/orders/${encodeURIComponent(button.dataset.order)}/payment-submissions/${encodeURIComponent(button.dataset.submission)}/review`, {
           method:"POST",
           body:JSON.stringify({ decision, note }),
         });
         if (decision === "approve") {
-          toast(`Payment approved. Order code: ${result.paymentCode}`);
+          toast(`Payment received. Order code: ${result.paymentCode}`);
         } else {
           toast(decision === "hold" ? "Payment proof put on hold" : "Payment proof rejected");
         }
