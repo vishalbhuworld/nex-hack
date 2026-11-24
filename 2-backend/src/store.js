@@ -838,7 +838,116 @@ async function runConcurrencyDemo() {
   return { responses, snapshot };
 }
 
+
+function findAlternativeStores(orderId, itemId) {
+  const order = state.orders[orderId];
+
+  if (!order) {
+    throw storeError("Unknown order", 404);
+  }
+
+  const item = order.items.find(i => i.itemId === itemId);
+
+  if (!item) {
+    throw storeError("Unknown item", 404);
+  }
+
+  if (item.status !== "paid") {
+    return [];
+  }
+
+  return state.stores
+    .filter(s =>
+      s.id !== item.storeId &&
+      s.available &&
+      availableStock(s.id, item.sku) >= item.quantity
+    )
+    .map(s => ({
+      storeId: s.id,
+      name: s.name,
+      sku: item.sku,
+      available: availableStock(s.id, item.sku),
+      quantity: item.quantity,
+      amount: item.amount
+    }))
+    .sort((a, b) => b.available - a.available);
+}
+
+
+function switchStore({
+  orderId,
+  itemId,
+  targetStoreId,
+  customerEmail,
+  paymentCode
+}) {
+  const order = state.orders[orderId];
+
+  if (!order) {
+    throw storeError("Unknown order", 404);
+  }
+
+  if (!customerEmail || order.customerEmail !== customerEmail) {
+    throw storeError("Unauthorized order", 403);
+  }
+
+  if (!order.paymentCode ||
+      order.paymentCode !== paymentCode) {
+    throw storeError("Invalid payment code", 403);
+  }
+
+  const item = order.items.find(i => i.itemId === itemId);
+
+  if (!item || item.status !== "paid") {
+    throw storeError("Only paid and undispatched items can switch stores", 409);
+  }
+
+  if (item.storeId === targetStoreId) {
+    throw storeError("Item already belongs to this store", 409);
+  }
+
+  const pendingOperation = Object.values(state.financial).some(op =>
+    op.orderId === orderId &&
+    op.status === "pending"
+  );
+
+  if (pendingOperation) {
+    throw storeError("Financial operation pending", 409);
+  }
+
+  const alternatives = findAlternativeStores(orderId, itemId);
+  const target = alternatives.find(s => s.storeId === targetStoreId);
+
+  if (!target) {
+    throw storeError("Alternative store stock unavailable", 409);
+  }
+
+  const previousStoreId = item.storeId;
+
+  state.inventory[targetStoreId][item.sku] -= item.quantity;
+  state.inventory[previousStoreId][item.sku] += item.quantity;
+
+  item.storeId = targetStoreId;
+
+  addEvent(
+    "store_switched",
+    `Item ${item.name} switched from ${previousStoreId} to ${targetStoreId}`,
+    orderId,
+    {
+      itemId,
+      previousStoreId,
+      targetStoreId,
+      quantity: item.quantity,
+      amount: item.amount
+    }
+  );
+
+  return serializeOrder(order);
+}
+
 module.exports = {
+  switchStore,
+  findAlternativeStores,
   initializePersistence,
   flush,
   createOrder,

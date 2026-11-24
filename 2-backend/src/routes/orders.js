@@ -306,4 +306,56 @@ router.post("/:orderId/fail-store/:storeId", auth.authenticate, auth.allowRoles(
   }
 });
 
+
+router.get("/:orderId/alternatives/:itemId",
+  auth.authenticate,
+  auth.allowRoles("customer"),
+  async (req, res, next) => {
+    try {
+      const order = store.getSnapshot().orders.find(
+        o => o.id === req.params.orderId
+      );
+
+      if (!order || order.customerEmail !== req.user.email) {
+        return res.status(403).json({
+          error: "Order access denied"
+        });
+      }
+
+      const alternatives = store.findAlternativeStores(
+        req.params.orderId,
+        req.params.itemId
+      );
+
+      res.json({ alternatives });
+    } catch (error) {
+      next(error);
+    }
+});
+
+router.post("/:orderId/switch-store",
+  auth.authenticate,
+  auth.allowRoles("customer"),
+  async (req, res, next) => {
+    try {
+      const order = store.switchStore({
+        orderId: req.params.orderId,
+        itemId: req.body.itemId,
+        targetStoreId: req.body.targetStoreId,
+        customerEmail: req.user.email,
+        paymentCode: req.body.paymentCode
+      });
+
+      await store.flush();
+
+      res.json({
+        success: true,
+        message: "Store switched successfully",
+        order
+      });
+    } catch (error) {
+      next(error);
+    }
+});
+
 module.exports = router;

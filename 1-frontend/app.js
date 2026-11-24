@@ -48,6 +48,7 @@ function render() {
     renderProducts();
     renderCart();
     renderCustomerOrders();
+    attachStoreSwitchButtons();
   } else {
     renderOperationsSummary();
     renderStores();
@@ -261,7 +262,7 @@ function renderCustomerOrders() {
         method:"POST",
         body:JSON.stringify({ eventId:`customer-cancel-${orderId}-${itemId}`, itemId, ...(paid ? { paymentCode } : {}) }),
       });
-      toast(paid ? `Item cancelled. Refund of ${money(amount)} recorded.` : "Item cancelled; the rest of the order remains.");
+      toast(paid ? `Item cancelled. Refund of ${money(Number(button.dataset.itemAmount))} recorded.` : "Item cancelled; the rest of the order remains.");
       await load();
     } catch (error) { toast(error.message); }
   });
@@ -742,4 +743,97 @@ async function renderStoreReliability() {
   } catch (error) {
     console.warn("Reliability score unavailable:", error.message);
   }
+}
+
+
+function attachStoreSwitchButtons() {
+  if (currentUser?.role !== "customer") return;
+
+  document.querySelectorAll('[data-cancel-item][data-item-status="paid"]').forEach(cancelButton => {
+    const parent = cancelButton.parentElement;
+
+    if (parent.querySelector(".switchStoreButton")) return;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "switchStoreButton";
+    button.textContent = "Switch Store";
+
+    button.style.cssText =
+      "background:#2563eb;color:white;border:0;border-radius:8px;padding:9px 14px;margin:5px;cursor:pointer;font-weight:600;";
+
+    button.onclick = async () => {
+      const orderId = cancelButton.dataset.order;
+      const itemId = cancelButton.dataset.cancelItem;
+
+      const codeInput = [...document.querySelectorAll("[data-refund-code]")]
+        .find(input => input.dataset.refundCode === orderId);
+
+      const paymentCode = codeInput?.value.trim();
+
+      if (!paymentCode) {
+        return toast("Enter your unique order code first");
+      }
+
+      button.disabled = true;
+
+      try {
+        const data = await api(
+          `/api/orders/${encodeURIComponent(orderId)}/alternatives/${encodeURIComponent(itemId)}`
+        );
+
+        const alternatives = data.alternatives || [];
+
+        if (!alternatives.length) {
+          return toast("No alternative store has sufficient stock");
+        }
+
+        const choices = alternatives.map((s, i) =>
+          `${i + 1}. ${s.name} - Stock: ${s.available}`
+        ).join("\n");
+
+        const answer = window.prompt(
+          "Choose an alternative store:\n" + choices
+        );
+
+        if (answer === null) return;
+
+        const choice = Number(answer);
+
+        if (!Number.isInteger(choice) ||
+            choice < 1 ||
+            choice > alternatives.length) {
+          return toast("Invalid store selection");
+        }
+
+        const target = alternatives[choice - 1];
+
+        if (!window.confirm(
+          `Switch to ${target.name}? No additional payment required.`
+        )) return;
+
+        await api(
+          `/api/orders/${encodeURIComponent(orderId)}/switch-store`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              itemId,
+              targetStoreId: target.storeId,
+              paymentCode
+            })
+          }
+        );
+
+        toast("Store switched successfully!");
+        await load();
+
+      } catch (error) {
+        toast(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    };
+
+    parent.appendChild(button);
+  });
 }
