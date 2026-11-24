@@ -51,6 +51,7 @@ function render() {
   } else {
     renderOperationsSummary();
     renderStores();
+    void renderStoreReliability();
     if (currentUser.role === "admin") {
       renderPaymentVerification();
     } else if (currentUser.role === "staff") {
@@ -688,3 +689,57 @@ async function restoreSession() {
 
 selectLoginMode("customer");
 restoreSession();
+
+
+async function renderStoreReliability() {
+  const grid = document.getElementById("storeGrid");
+  if (!grid || !currentUser ||
+      !["admin", "staff"].includes(currentUser.role)) return;
+
+  try {
+    const data = await api("/api/controls/store-reliability");
+    if (!currentUser ||
+        !["admin", "staff"].includes(currentUser.role)) return;
+
+    grid.querySelectorAll(".reliabilityBox").forEach(
+      node => node.remove()
+    );
+
+    grid.querySelectorAll(".storeCard").forEach(card => {
+      const storeId = card.querySelector(".storeHead small")?.textContent;
+      const entry = data.scores.find(s => s.storeId === storeId);
+      if (!entry) return;
+
+      const score = entry.score === null
+        ? null
+        : Math.max(0, Math.min(100, Number(entry.score)));
+
+      const color = score === null ? "#64748b"
+        : score >= 90 ? "#16a34a"
+        : score >= 75 ? "#2563eb" : "#f59e0b";
+
+      const box = document.createElement("div");
+      box.className = "reliabilityBox";
+      box.style.cssText = "margin-top:14px;padding:12px;background:#f1f5f9;border-radius:12px;color:#1e293b;";
+
+      box.innerHTML = `
+        <div style="display:flex;justify-content:space-between">
+          <b>Reliability Score</b>
+          <b style="color:${color}">
+            ${score === null ? "No data" : score + "%"}
+          </b>
+        </div>
+        <div style="background:#cbd5e1;height:9px;border-radius:10px;margin:10px 0;overflow:hidden">
+          <div style="width:${score ?? 0}%;height:100%;background:${color};border-radius:10px"></div>
+        </div>
+        <small>Dispatched: ${Number(entry.successful)} |
+        Failed: ${Number(entry.failed)}</small>
+      `;
+
+      card.appendChild(box);
+    });
+
+  } catch (error) {
+    console.warn("Reliability score unavailable:", error.message);
+  }
+}
