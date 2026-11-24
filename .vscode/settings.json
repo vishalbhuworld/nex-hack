@@ -1,0 +1,8 @@
+{
+  "explorer.sortOrder": "filesFirst",
+  "files.exclude": {
+    ".vscode": true,
+    "backend": true,
+    "frontend": true
+  }
+}

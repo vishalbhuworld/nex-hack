@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Resolve — Multi-Store Fulfilment</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div class="brand"><span class="logo">R</span><b>RESOLVE</b><small>FinTech Demo</small></div>
+    <nav id="demoNav" class="hidden">
+      <button class="nav active" data-view="shop" data-roles="customer">Customer Shop</button>
+      <button class="nav" data-view="admin" data-roles="admin,staff">Store Operations</button>
+      <button class="nav" data-view="timeline" data-roles="staff">Staff Timeline</button>
+    </nav>
+    <div class="headerActions"><button id="reset" class="ghost hidden">↻ Reset demo</button><button id="logout" class="ghost hidden">Sign out</button></div>
+  </header>
+
+  <section id="authScreen" class="authScreen">
+    <div class="authHero">
+      <p class="eyebrow">MULTI-STORE COMMERCE</p>
+      <h2>One cart.<br>Every store in sync.</h2>
+      <p>Stock reservations, payments and fulfilment—coordinated in one place.</p>
+      <div class="authArtwork" role="img" aria-label="Stores, parcels and a delivery van connected in a fulfilment network"></div>
+      <div class="authFootnote"><span></span> Orders tracked from checkout to fulfilment</div>
+    </div>
+    <div class="authCard">
+      <p class="eyebrow">WELCOME TO RESOLVE</p>
+      <h1>Sign in to continue</h1>
+      <p id="loginRoleBadge" class="roleBadge loginRoleBadge">Signing in as Customer</p>
+      <p class="authIntro">Customers can continue with an email. Staff accounts are issued by an administrator.</p>
+      <div class="loginModes">
+        <button class="loginMode active" data-login-mode="customer">Customer</button>
+        <button class="loginMode" data-login-mode="staff">Staff</button>
+        <button class="loginMode" data-login-mode="admin">Admin</button>
+      </div>
+      <form id="customerLogin" class="loginForm">
+        <label>Email address<input name="email" type="email" placeholder="you@example.com" required></label>
+        <button class="primary">Continue as customer</button>
+      </form>
+      <form id="credentialLogin" class="loginForm hidden">
+        <label id="credentialIdLabel">Staff ID<input name="id" autocomplete="username" required></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+        <button id="credentialSubmit" class="primary">Sign in</button>
+      </form>
+      <p id="loginHint" class="hint">Email verification is not enabled in this free demo.</p>
+      <p id="loginError" class="loginError" role="alert"></p>
+      <p class="demoCredential">Default local demo admin: <b>admin</b> / <b>admin123</b> (unless overridden in .env)</p>
+    </div>
+  </section>
+
+  <main id="appMain" class="hidden">
+    <div id="roleBadge" class="roleBadge roleBanner hidden"></div>
+    <section id="shopView" class="view">
+      <div class="hero">
+        <div><p class="eyebrow">LIVE MARKETPLACE</p><h1>Reliable checkout.<br><span>Every store accounted for.</span></h1></div>
+        <div class="stats"><div><b id="storeCount">3</b><span>Connected stores</span></div><div><b id="orderCount">0</b><span>Active orders</span></div></div>
+      </div>
+      <div class="demoGuide">
+        <div><span>1</span><b>Add a product</b></div>
+        <div><span>2</span><b>Reserve &amp; checkout</b></div>
+      </div>
+      <div class="layout">
+        <div>
+          <div class="sectionTitle"><h2>Products</h2><span>Live inventory</span></div>
+          <div id="products" class="products"></div>
+        </div>
+        <aside class="cart">
+          <h2>Smart Basket</h2>
+          <div id="cartItems"></div>
+          <div class="divider"></div>
+          <div class="total"><span>Total</span><b id="cartTotal">₹0</b></div>
+          <button id="checkout" class="primary">Continue to delivery details</button>
+          <form id="deliveryForm" class="deliveryForm hidden">
+            <h3>Delivery details</h3>
+            <label>Full name<input name="fullName" autocomplete="name" maxlength="80" required></label>
+            <label>Phone number<input name="phone" type="tel" inputmode="tel" autocomplete="tel" minlength="10" maxlength="18" required></label>
+            <label>Delivery address<input name="address" autocomplete="street-address" maxlength="180" required></label>
+            <label>Landmark / apartment <span class="optional">(optional)</span><input name="landmark" maxlength="100"></label>
+            <div class="addressRow">
+              <label>City<input name="city" autocomplete="address-level2" maxlength="80" required></label>
+              <label>PIN code<input name="pincode" inputmode="numeric" autocomplete="postal-code" pattern="[0-9]{6}" maxlength="6" required></label>
+            </div>
+            <div class="deliveryActions"><button type="button" id="cancelDelivery" class="ghost">Cancel</button><button class="primary">Place order</button></div>
+          </form>
+          <p class="hint">Stock is reserved for 10 minutes</p>
+        </aside>
+      </div>
+      <div class="myOrders"><div class="sectionTitle"><h2>My orders</h2><span>Order status updates</span></div><div id="customerOrders" class="orders"></div></div>
+    </section>
+
+    <section id="adminView" class="view hidden">
+      <div class="sectionHeading">
+        <div><p class="eyebrow">OPERATIONS CONTROL</p><h1>Store fulfilment</h1></div>
+        <div class="actions">
+          <button id="refreshOrders" class="ghost">Refresh orders</button>
+          <button id="demoScenario" class="primary small">Load split-order demo</button>
+          <button id="concurrency" class="primary small">Run stock race</button>
+        </div>
+      </div>
+      <div class="opsSummary">
+        <article class="opsMetric"><span>Total orders</span><b id="incomingOrderCount">0</b></article>
+        <article class="opsMetric"><span>Pending orders</span><b id="pendingOrderCount">0</b></article>
+        <article class="opsMetric"><span>Completed orders</span><b id="completedOrderCount">0</b></article>
+        <article class="opsMetric"><span>Units awaiting action</span><b id="pendingItemCount">0</b></article>
+        <div id="storeOrderSummary" class="storeOrderSummary"></div>
+      </div>
+      <div id="storeGrid" class="storeGrid"></div>
+      <div class="orderSection"><div class="sectionTitle"><h2>Orders</h2><span id="orderBadge"></span></div><div id="orders" class="orders"></div></div>
+      <section id="staffManagement" class="staffManagement hidden">
+        <div class="sectionTitle"><h2>People &amp; access</h2><span>Owner/Admin only · passwords are never displayed</span></div>
+        <div class="peopleCounts">
+          <article class="peopleCount"><span>Staff accounts</span><b id="staffCount">0</b></article>
+          <article class="peopleCount"><span>Customers seen</span><b id="customerCount">0</b></article>
+        </div>
+        <div class="directoryGrid">
+          <section class="directoryPanel">
+            <div class="sectionTitle"><h3>Staff</h3><span id="staffDirectoryCount">0 accounts</span></div>
+            <form id="staffForm" class="staffForm">
+              <label>Staff name<input name="name" required></label>
+              <label>Staff ID<input name="id" minlength="3" required></label>
+              <label>Temporary password<input name="password" type="password" minlength="8" required></label>
+              <button class="primary">Create staff login</button>
+            </form>
+            <div id="staffList" class="staffList"></div>
+          </section>
+          <section class="directoryPanel">
+            <div class="sectionTitle"><h3>Customers</h3><span id="customerDirectoryCount">0 accounts</span></div>
+            <p class="hint">A customer appears here after their first sign-in.</p>
+            <div id="customerList" class="staffList"></div>
+          </section>
+        </div>
+      </section>
+    </section>
+
+    <section id="timelineView" class="view hidden">
+      <div class="sectionHeading"><div><p class="eyebrow">AUDIT &amp; RECOVERY</p><h1>Transaction timeline</h1></div></div>
+      <section class="recoveryPanel">
+        <div class="sectionTitle"><h2>Needs attention</h2><span id="issueCount">0 open issues</span></div>
+        <div id="recoveryIssues" class="recoveryIssues"></div>
+      </section>
+      <div class="timelineLayout">
+        <div id="timeline" class="timeline"></div>
+        <aside class="financial"><h2>Financial operations</h2><div id="financial"></div></aside>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
