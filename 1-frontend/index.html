@@ -16,6 +16,7 @@
       <div class="sidebarDivider" data-roles="admin,staff"></div>
       <span class="sidebarCaption" data-roles="admin">WORKSPACE</span>
       <button class="adminSideLink active" data-dashboard-link data-section="adminTop" data-roles="admin">Overview</button>
+      <button class="adminSideLink" data-dashboard-link data-section="paymentVerification" data-roles="admin">Payment verification <b class="sideCount" id="paymentQueueCount">0</b></button>
       <button class="adminSideLink" data-dashboard-link data-section="demoControls" data-roles="admin">Demo &amp; testing</button>
       <button class="adminSideLink" data-dashboard-link data-section="inventorySection" data-roles="admin">Stores &amp; inventory</button>
       <button class="adminSideLink" data-dashboard-link data-section="staffManagement" data-roles="admin">People &amp; access</button>
@@ -98,7 +99,7 @@
             </div>
             <div class="deliveryActions"><button type="button" id="cancelDelivery" class="ghost">Cancel</button><button class="primary">Place order</button></div>
           </form>
-          <p class="hint">Stock is reserved for 10 minutes</p>
+          <p class="hint">Stock is reserved for 10 minutes; submitted payment proof extends the hold for 24 hours.</p>
         </aside>
       </div>
       <div class="myOrders"><div class="sectionTitle"><h2>My orders</h2><span>Order status updates</span></div><div id="customerOrders" class="orders"></div></div>
@@ -116,6 +117,11 @@
         <article class="opsMetric"><span>Units awaiting action</span><b id="pendingItemCount">0</b></article>
         <div id="storeOrderSummary" class="storeOrderSummary"></div>
       </div>
+      <section id="paymentVerification" class="paymentVerification" data-roles="admin">
+        <div class="sectionTitle"><h2>Payment verification</h2><span>Check the UTR against your UPI/bank app before approving.</span></div>
+        <p class="paymentVerificationNotice">QR payments are not verified automatically. Approving a valid proof marks the order paid and generates its unique code.</p>
+        <div id="paymentVerificationList" class="paymentVerificationList" aria-live="polite"></div>
+      </section>
       <div class="staffMetrics hidden">
         <article class="staffMetric staffMetricBlue"><span class="metricIcon">🛒</span><div><span>Today's Orders</span><b id="staffTodayOrders">0</b></div></article>
         <article class="staffMetric staffMetricPurple"><span class="metricIcon">⬡</span><div><span>Pending Fulfilment</span><b id="staffPendingUnits">0</b></div></article>

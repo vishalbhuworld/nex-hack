@@ -51,7 +51,9 @@ function render() {
   } else {
     renderOperationsSummary();
     renderStores();
-    if (currentUser.role === "staff") {
+    if (currentUser.role === "admin") {
+      renderPaymentVerification();
+    } else if (currentUser.role === "staff") {
       renderStaffMetrics();
       renderOrders();
       renderTimeline();
@@ -202,12 +204,43 @@ function renderCustomerOrders() {
       <div class="customerOrderItems">${order.items.map((item) => `
         <div class="customerOrderItem">
           <span class="part">${escapeHtml(item.name)} ×${item.quantity} · ${escapeHtml(item.storeName || item.storeId)} · ${escapeHtml(item.status)}</span>
-          ${["reserved", "paid"].includes(item.status) ? `<button type="button" data-cancel-item="${escapeHtml(item.itemId)}" data-order="${escapeHtml(order.id)}" data-item-status="${escapeHtml(item.status)}" data-item-name="${escapeHtml(item.name)}" data-item-amount="${Number(item.amount)}">${item.status === "paid" ? `Cancel & refund ${money(item.amount)}` : "Cancel item"}</button>` : ""}
+          ${["reserved", "paid"].includes(item.status) && !["pending", "hold"].includes(order.paymentStatus) ? `<button type="button" data-cancel-item="${escapeHtml(item.itemId)}" data-order="${escapeHtml(order.id)}" data-item-status="${escapeHtml(item.status)}" data-item-name="${escapeHtml(item.name)}" data-item-amount="${Number(item.amount)}">${item.status === "paid" ? `Cancel & refund ${money(item.amount)}` : "Cancel item"}</button>` : ""}
         </div>`).join("")}</div>
-      ${order.status === "reserved" ? `<div class="orderPayment" data-payment-qr="${escapeHtml(order.id)}" aria-live="polite"><p class="hint">Loading UPI payment QR…</p></div>` : ""}
-      <p class="hint">Order total: ${money(order.total)}${order.paidTotal ? `<br>Paid: ${money(order.paidTotal)}` : ""}${order.refundTotal ? `<br>Demo refund recorded: ${money(order.refundTotal)}` : ""}${order.paymentCode ? `<br>Payment confirmation code: <b>${escapeHtml(order.paymentCode)}</b>` : ""}</p>
+      ${order.status === "reserved" ? `
+        <div class="orderPayment" data-payment-qr="${escapeHtml(order.id)}" aria-live="polite"><p class="hint">Loading UPI payment QR…</p></div>
+        <div class="paymentProof">
+          ${order.paymentStatus === "pending" ? `<p class="paymentStatus pending">Payment proof submitted · Waiting for admin review</p>` : ""}
+          ${order.paymentStatus === "hold" ? `<p class="paymentStatus hold">Payment proof is on hold · Contact the store admin</p>` : ""}
+          ${order.paymentStatus === "rejected" ? `<p class="paymentStatus rejected">Payment proof rejected${order.paymentReviewNote ? `: ${escapeHtml(order.paymentReviewNote)}` : ""}. Submit corrected details to retry.</p>` : ""}
+          ${!order.paymentStatus || order.paymentStatus === "rejected" ? `
+            <form class="paymentProofForm" data-payment-proof="${escapeHtml(order.id)}">
+              <label>UPI UTR / transaction reference<input name="utr" autocomplete="off" minlength="6" maxlength="35" pattern="[A-Za-z0-9/-]{6,35}" required></label>
+              <label>Payment screenshot <span class="optional">(optional, PNG/JPEG/WebP, max 200 KB)</span><input name="proof" type="file" accept="image/png,image/jpeg,image/webp"></label>
+              <button type="submit" class="primary">Submit payment for review</button>
+            </form>` : ""}
+        </div>` : ""}
+      <p class="hint">Order total: ${money(order.total)}${order.paidTotal ? `<br>Paid: ${money(order.paidTotal)}` : ""}${order.refundTotal ? `<br>Demo refund recorded: ${money(order.refundTotal)}` : ""}${order.paymentCode ? `<br>Unique order code: <b>${escapeHtml(order.paymentCode)}</b>` : ""}</p>
     </article>`).join("") : `<p class="hint">Your placed orders and their status will appear here.</p>`;
   snapshot.orders.filter((order) => order.status === "reserved").forEach((order) => loadPaymentQr(order.id));
+  document.querySelectorAll("[data-payment-proof]").forEach((form) => {
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      const utr = form.elements.utr.value.trim();
+      const proofFile = form.elements.proof.files[0];
+      if (proofFile && (proofFile.size > 200 * 1024 || !["image/png", "image/jpeg", "image/webp"].includes(proofFile.type))) {
+        return toast("Choose a PNG, JPEG, or WebP screenshot smaller than 200 KB");
+      }
+      try {
+        const proofDataUrl = proofFile ? await readFileAsDataUrl(proofFile) : null;
+        await api(`/api/orders/${encodeURIComponent(form.dataset.paymentProof)}/payment-proof`, {
+          method:"POST",
+          body:JSON.stringify({ utr, proofDataUrl }),
+        });
+        toast("Payment proof submitted. The admin will review it.");
+        await load();
+      } catch (error) { toast(error.message); }
+    };
+  });
   document.querySelectorAll("[data-cancel-item]").forEach((button) => button.onclick = async () => {
     const orderId = button.dataset.order;
     const itemId = button.dataset.cancelItem;
@@ -225,6 +258,15 @@ function renderCustomerOrders() {
       toast(paid ? `Item cancelled. Demo refund ${money(amount)} recorded.` : "Item cancelled; the rest of the order remains.");
       await load();
     } catch (error) { toast(error.message); }
+  });
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Could not read payment screenshot"));
+    reader.readAsDataURL(file);
   });
 }
 
@@ -246,6 +288,58 @@ async function loadPaymentQr(orderId) {
     const currentTarget = findTarget();
     if (currentTarget) currentTarget.innerHTML = `<p class="hint">${escapeHtml(error.message)}</p>`;
   }
+}
+
+function renderPaymentVerification() {
+  const submissions = snapshot.paymentSubmissions || [];
+  const openCount = submissions.filter((submission) => ["pending", "hold"].includes(submission.status)).length;
+  document.getElementById("paymentQueueCount").textContent = openCount;
+  document.getElementById("paymentVerificationList").innerHTML = submissions.length
+    ? submissions.map((submission) => `
+      <article class="paymentReviewCard" data-payment-review-card="${escapeHtml(submission.submissionId)}">
+        <div class="paymentReviewHeader">
+          <div><b>Order ${escapeHtml(submission.orderId)}</b><span>${escapeHtml(submission.customer)} · ${escapeHtml(submission.customerEmail)}</span></div>
+          <strong>${money(submission.amount)}</strong>
+        </div>
+        <div class="paymentReviewDetails">
+          <span><b>UTR:</b> ${escapeHtml(submission.utr)}</span>
+          <span><b>Status:</b> ${escapeHtml(submission.status.replaceAll("_", " ").toUpperCase())}</span>
+          <span><b>Submitted:</b> ${new Date(submission.submittedAt).toLocaleString()}</span>
+          ${submission.reviewNote ? `<span><b>Review note:</b> ${escapeHtml(submission.reviewNote)}</span>` : ""}
+          ${submission.paymentCode ? `<span><b>Order code:</b> ${escapeHtml(submission.paymentCode)}</span>` : ""}
+        </div>
+        ${submission.proofDataUrl ? `<a class="paymentProofImageLink" href="${escapeHtml(submission.proofDataUrl)}" target="_blank" rel="noopener noreferrer"><img src="${escapeHtml(submission.proofDataUrl)}" alt="Payment screenshot for order ${escapeHtml(submission.orderId)}"></a>` : `<p class="hint">No screenshot attached.</p>`}
+        ${["pending", "hold"].includes(submission.status) ? `
+          <label class="paymentReviewNote">Review note <span class="optional">(required to reject)</span><input data-review-note maxlength="300"></label>
+          <div class="paymentReviewActions">
+            <button type="button" class="primary" data-payment-decision="approve" data-order="${escapeHtml(submission.orderId)}" data-submission="${escapeHtml(submission.submissionId)}">Approve &amp; generate code</button>
+            <button type="button" class="paymentRejectButton" data-payment-decision="reject" data-order="${escapeHtml(submission.orderId)}" data-submission="${escapeHtml(submission.submissionId)}">Reject</button>
+            ${submission.status === "pending" ? `<button type="button" class="paymentHoldButton" data-payment-decision="hold" data-order="${escapeHtml(submission.orderId)}" data-submission="${escapeHtml(submission.submissionId)}">Hold</button>` : ""}
+          </div>` : ""}
+      </article>`).join("")
+    : `<p class="paymentQueueEmpty">No payment submissions to review.</p>`;
+
+  document.querySelectorAll("[data-payment-decision]").forEach((button) => {
+    button.onclick = async () => {
+      const card = button.closest("[data-payment-review-card]");
+      const decision = button.dataset.paymentDecision;
+      const note = card.querySelector("[data-review-note]")?.value.trim() || "";
+      if (decision === "reject" && note.length < 3) return toast("Add a short reason before rejecting a payment");
+      if (decision === "approve" && !window.confirm("Verify this UTR in your UPI/bank app before approving. Continue?")) return;
+      try {
+        const result = await api(`/api/orders/${encodeURIComponent(button.dataset.order)}/payment-submissions/${encodeURIComponent(button.dataset.submission)}/review`, {
+          method:"POST",
+          body:JSON.stringify({ decision, note }),
+        });
+        if (decision === "approve") {
+          toast(`Payment approved. Order code: ${result.paymentCode}`);
+        } else {
+          toast(decision === "hold" ? "Payment proof put on hold" : "Payment proof rejected");
+        }
+        await refreshDashboard();
+      } catch (error) { toast(error.message); }
+    };
+  });
 }
 
 function renderCart() {
@@ -287,7 +381,7 @@ function renderOrders() {
               : order.status === "fulfilled" ? { label:"Fulfilled", state:"complete" }
                 : { label:order.status.replaceAll("_", " "), state:"pending" };
       const actions = order.status === "reserved"
-        ? `<button class="staffRowAction pending" data-payment="${escapeHtml(order.id)}">Process <span>→</span></button>`
+        ? `<span class="staffNoAction">Awaiting payment verification</span>`
         : ["paid", "partially_fulfilled"].includes(order.status)
           ? order.items.filter((item) => item.status === "paid").map((item) =>
             `<button class="staffRowAction ready" data-dispatch="${escapeHtml(order.id)}|${escapeHtml(item.storeId)}">Dispatch</button>`).join("")
@@ -306,14 +400,6 @@ function renderOrders() {
         </article>`;
     }).join("")
     : `<p class="staffNoOrders">No orders have been placed yet.</p>`;
-  document.querySelectorAll("[data-payment]").forEach((button) => button.onclick = async () => {
-    try {
-      const eventId = `payment-${button.dataset.payment}-demo`;
-      const result = await api(`/api/orders/${button.dataset.payment}/payment`, { method:"POST", body:JSON.stringify({ eventId }) });
-      toast(result.paymentCode ? `Demo payment confirmed · code ${result.paymentCode}` : `Payment ${result.operation.status}`);
-      await load();
-    } catch (error) { toast(error.message); }
-  });
   document.querySelectorAll("[data-dispatch]").forEach((button) => button.onclick = async () => {
     const [orderId, storeId] = button.dataset.dispatch.split("|");
     await api(`/api/orders/${orderId}/dispatch/${storeId}`, { method:"POST" }); toast("Fulfilment dispatched"); await load();
@@ -527,7 +613,12 @@ function showApp(user) {
   refreshDashboard().catch((error) => toast(error.message));
   if (refreshTimer) window.clearInterval(refreshTimer);
   refreshTimer = window.setInterval(() => {
-    if (!document.hidden && currentUser) refreshDashboard().catch((error) => console.error("Background refresh failed:", error));
+    const hasPaymentDraft = currentUser?.role === "customer" &&
+      [...document.querySelectorAll(".paymentProofForm")].some((form) =>
+        form.elements.utr.value.trim() || form.elements.proof.files.length > 0);
+    if (!document.hidden && currentUser && !hasPaymentDraft) {
+      refreshDashboard().catch((error) => console.error("Background refresh failed:", error));
+    }
   }, 5000);
 }
 

@@ -22,6 +22,10 @@ router.get("/", auth.authenticate, async (req, res, next) => {
           refundTotal: order.items.filter((item) => item.status === "refunded")
             .reduce((sum, item) => sum + item.amount, 0),
           paymentCode: order.paymentCode || null,
+          paymentStatus: order.paymentAttempts?.at(-1)?.status || null,
+          paymentReviewNote: order.paymentAttempts?.at(-1)?.status === "rejected"
+            ? order.paymentAttempts.at(-1).reviewNote || ""
+            : "",
           createdAt: order.createdAt,
           items: order.items.map(({ itemId, name, quantity, status, amount, storeId }) => ({
             itemId,
@@ -51,15 +55,50 @@ router.get("/", auth.authenticate, async (req, res, next) => {
       }),
     };
     if (req.user.role === "admin") {
+      const paymentSubmissions = snapshot.orders.flatMap((order) =>
+        (order.paymentAttempts || []).map((attempt) => ({
+          submissionId: attempt.id,
+          orderId: order.id,
+          customer: order.customer,
+          customerEmail: order.customerEmail,
+          amount: attempt.amount,
+          utr: attempt.utr,
+          status: attempt.status,
+          submittedAt: attempt.submittedAt,
+          reviewedAt: attempt.reviewedAt || null,
+          reviewedBy: attempt.reviewedBy || null,
+          reviewNote: attempt.reviewNote || "",
+          paymentCode: attempt.status === "approved" ? order.paymentCode || null : null,
+          ...(attempt.status === "pending" || attempt.status === "hold"
+            ? { proofDataUrl: attempt.proofDataUrl || null }
+            : {}),
+        })))
+        .sort((left, right) => right.submittedAt.localeCompare(left.submittedAt))
+        .slice(0, 100);
       return res.json({
         stores: snapshot.stores,
         orders: [],
         financial: [],
         events: [],
         orderSummary,
+        paymentSubmissions,
       });
     }
-    res.json({ ...snapshot, orderSummary });
+    const orders = req.user.role === "staff"
+      ? snapshot.orders.map((order) => {
+        const { paymentAttempts = [], ...staffOrder } = order;
+        return { ...staffOrder, paymentStatus: paymentAttempts.at(-1)?.status || null };
+      })
+      : snapshot.orders.map((order) => {
+        const latestAttempt = order.paymentAttempts?.at(-1);
+        const { paymentAttempts: _paymentAttempts, ...customerOrder } = order;
+        return {
+          ...customerOrder,
+          paymentStatus: latestAttempt?.status || null,
+          paymentReviewNote: latestAttempt?.status === "rejected" ? latestAttempt.reviewNote || "" : "",
+        };
+      });
+    res.json({ ...snapshot, orders, orderSummary });
   } catch (error) {
     next(error);
   }
@@ -112,6 +151,37 @@ router.get("/:orderId/payment-qr", auth.authenticate, auth.allowRoles("customer"
   }
 });
 
+router.post("/:orderId/payment-proof", auth.authenticate, auth.allowRoles("customer"), async (req, res, next) => {
+  try {
+    const result = store.submitPaymentProof({
+      orderId: req.params.orderId,
+      customerEmail: req.user.email,
+      utr: req.body.utr,
+      proofDataUrl: req.body.proofDataUrl,
+    });
+    await store.flush();
+    res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/:orderId/payment-submissions/:submissionId/review", auth.authenticate, auth.allowRoles("admin"), async (req, res, next) => {
+  try {
+    const result = store.reviewPaymentSubmission({
+      orderId: req.params.orderId,
+      submissionId: req.params.submissionId,
+      decision: req.body.decision,
+      note: req.body.note,
+      adminId: req.user.id,
+    });
+    await store.flush();
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/", auth.authenticate, auth.allowRoles("customer", "admin"), async (req, res, next) => {
   try {
     const isCustomer = req.user.role === "customer";
@@ -156,38 +226,15 @@ router.post("/", auth.authenticate, auth.allowRoles("customer", "admin"), async 
   }
 });
 
-router.post("/:orderId/payment", auth.authenticate, auth.allowRoles("admin", "staff"), async (req, res, next) => {
-  try {
-    const eventId = req.body.eventId || `pay-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const snapshot = store.getSnapshot();
-    const order = snapshot.orders.find((entry) => entry.id === req.params.orderId);
-    if (!order) throw Object.assign(new Error("Unknown order"), { status: 404 });
-    const delayMs = Number(req.body.delayMs || 0);
-    const existingPayment = snapshot.financial.find((operation) => operation.eventId === eventId);
-    const amount = existingPayment && existingPayment.orderId === order.id && existingPayment.type === "payment"
-      ? existingPayment.amount
-      : order.items.filter((item) => item.status === "reserved")
-        .reduce((sum, item) => sum + item.amount, 0);
-    const result = store.processFinancialEvent({
-      orderId: req.params.orderId,
-      eventId,
-      type: "payment",
-      amount,
-      delayMs,
-    });
-    await store.flush();
-    const updatedOrder = store.getSnapshot().orders.find((entry) => entry.id === req.params.orderId);
-    res.json({ ...result, paymentCode: updatedOrder.paymentCode || null });
-  } catch (error) {
-    next(error);
-  }
-});
-
 router.post("/:orderId/cancel", auth.authenticate, auth.allowRoles("customer", "admin", "staff"), async (req, res, next) => {
   try {
     const orderId = req.params.orderId;
     const order = store.getSnapshot().orders.find((entry) => entry.id === orderId);
     if (!order) throw Object.assign(new Error("Unknown order"), { status: 404 });
+    const latestPaymentAttempt = order.paymentAttempts?.at(-1);
+    if (latestPaymentAttempt && ["pending", "hold"].includes(latestPaymentAttempt.status)) {
+      throw Object.assign(new Error("Cancellation is locked while payment proof is under review"), { status: 409 });
+    }
     if (req.user.role === "customer" && order.customerEmail !== req.user.email) {
       throw Object.assign(new Error("You can only cancel your own orders"), { status: 403 });
     }
@@ -209,6 +256,9 @@ router.post("/:orderId/cancel", auth.authenticate, auth.allowRoles("customer", "
 router.post("/:orderId/financial-event", auth.authenticate, auth.allowRoles("admin", "staff"), async (req, res, next) => {
   try {
     const { eventId, type, amount, itemIds, delayMs } = req.body;
+    if (type === "payment") {
+      throw Object.assign(new Error("Payments must be verified through a submitted payment proof"), { status: 403 });
+    }
     const result = store.processFinancialEvent({ orderId: req.params.orderId, eventId, type, amount, itemIds, delayMs });
     await store.flush();
     res.json(result);

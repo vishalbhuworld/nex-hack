@@ -290,6 +290,122 @@ function serializeOrder(order) {
   };
 }
 
+function validatePaymentProofImage(proofDataUrl) {
+  if (proofDataUrl === undefined || proofDataUrl === null || proofDataUrl === "") return null;
+  if (typeof proofDataUrl !== "string") throw storeError("Payment proof must be an image");
+
+  const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(proofDataUrl);
+  if (!match) throw storeError("Payment proof must be a PNG, JPEG, or WebP image");
+  const bytes = Buffer.from(match[2], "base64");
+  if (bytes.length === 0 || bytes.length > 200 * 1024 || bytes.toString("base64") !== match[2]) {
+    throw storeError("Payment proof image must be smaller than 200 KB");
+  }
+
+  const validSignature = match[1] === "image/png"
+    ? bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    : match[1] === "image/jpeg"
+      ? bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+      : bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP";
+  if (!validSignature) throw storeError("Payment proof image content does not match its file type");
+  return proofDataUrl;
+}
+
+function submitPaymentProof({ orderId, customerEmail, utr, proofDataUrl }) {
+  if (expireReservations()) flushInBackground();
+  const order = state.orders[orderId];
+  if (!order) throw storeError("Unknown order", 404);
+  if (order.customerEmail !== customerEmail) throw storeError("You can only submit payment for your own orders", 403);
+  if (order.status !== "reserved") throw storeError("This order is not awaiting payment", 409);
+
+  const normalizedUtr = typeof utr === "string" ? utr.trim().toUpperCase() : "";
+  if (!/^[A-Z0-9/-]{6,35}$/.test(normalizedUtr)) {
+    throw storeError("Enter a valid UTR or transaction reference");
+  }
+  const attempts = order.paymentAttempts || [];
+  const latestAttempt = attempts.at(-1);
+  if (latestAttempt && ["pending", "hold", "approved"].includes(latestAttempt.status)) {
+    throw storeError("A payment submission is already locked for review", 409);
+  }
+  const duplicateUtr = Object.entries(state.orders).some(([otherOrderId, otherOrder]) =>
+    otherOrderId !== orderId && (otherOrder.paymentAttempts || []).some((attempt) => attempt.utr === normalizedUtr));
+  if (duplicateUtr) throw storeError("This UTR has already been submitted for another order", 409);
+
+  const amount = order.items.filter((item) => item.status === "reserved")
+    .reduce((total, item) => total + item.amount, 0);
+  if (amount <= 0) throw storeError("No payment is due for this order", 409);
+  const validatedProofDataUrl = validatePaymentProofImage(proofDataUrl);
+  const reservation = state.reservations[order.reservationId];
+  if (!reservation || reservation.status !== "active") {
+    throw storeError("The stock reservation has expired. Place the order again to pay", 409);
+  }
+  reservation.expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+  const attempt = {
+    id: id("submission"),
+    utr: normalizedUtr,
+    amount,
+    status: "pending",
+    proofDataUrl: validatedProofDataUrl,
+    submittedAt: now(),
+  };
+  order.paymentAttempts = [...attempts, attempt];
+  addEvent("payment_proof_submitted", `Payment proof submitted for ₹${amount.toLocaleString("en-IN")}`, orderId, {
+    submissionId: attempt.id,
+  });
+  return { submissionId: attempt.id, amount, status: attempt.status };
+}
+
+function reviewPaymentSubmission({ orderId, submissionId, decision, adminId, note = "" }) {
+  if (expireReservations()) flushInBackground();
+  const order = state.orders[orderId];
+  if (!order) throw storeError("Unknown order", 404);
+  const attempt = (order.paymentAttempts || []).find((entry) => entry.id === submissionId);
+  if (!attempt) throw storeError("Unknown payment submission", 404);
+  if (!["approve", "reject", "hold"].includes(decision)) throw storeError("Choose approve, reject, or hold");
+
+  const reviewNote = typeof note === "string" ? note.trim() : "";
+  if (reviewNote.length > 300) throw storeError("Review note cannot exceed 300 characters");
+  if (decision === "reject" && reviewNote.length < 3) {
+    throw storeError("Add a short reason before rejecting a payment");
+  }
+
+  const nextStatus = { approve: "approved", reject: "rejected", hold: "hold" }[decision];
+  if (attempt.status === nextStatus) {
+    return { duplicate: true, status: attempt.status, paymentCode: order.paymentCode || null };
+  }
+  if (!["pending", "hold"].includes(attempt.status)) {
+    throw storeError("This payment submission has already been reviewed", 409);
+  }
+
+  if (decision === "approve") {
+    if (order.status !== "reserved") throw storeError("Order is no longer awaiting payment", 409);
+    const amountDue = order.items.filter((item) => item.status === "reserved")
+      .reduce((total, item) => total + item.amount, 0);
+    if (amountDue <= 0 || amountDue !== attempt.amount) {
+      throw storeError("Payment amount no longer matches the reserved order items", 409);
+    }
+
+    const result = processFinancialEvent({
+      orderId,
+      eventId: `payment-proof-${submissionId}`,
+      type: "payment",
+      amount: amountDue,
+    });
+    if (result.operation.status !== "applied") {
+      throw storeError("Payment could not be applied to this order", 409);
+    }
+  }
+
+  attempt.status = nextStatus;
+  attempt.reviewedAt = now();
+  attempt.reviewedBy = adminId;
+  attempt.reviewNote = reviewNote;
+  addEvent(`payment_proof_${nextStatus}`, `Payment proof ${nextStatus} by administrator`, orderId, {
+    submissionId,
+  });
+  return { duplicate: false, status: attempt.status, paymentCode: order.paymentCode || null };
+}
+
 function getStoreSku(storeId, sku) {
   return (state.inventory[storeId] && state.inventory[storeId][sku]) || 0;
 }
@@ -726,6 +842,8 @@ module.exports = {
   initializePersistence,
   flush,
   createOrder,
+  submitPaymentProof,
+  reviewPaymentSubmission,
   processFinancialEvent,
   dispatchStore,
   failStore,
