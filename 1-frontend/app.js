@@ -52,6 +52,7 @@ function render() {
     renderOperationsSummary();
     renderStores();
     if (currentUser.role === "staff") {
+      renderStaffMetrics();
       renderOrders();
       renderTimeline();
     }
@@ -67,6 +68,28 @@ function renderOperationsSummary() {
   document.getElementById("storeOrderSummary").innerHTML = summary.byStore.map((entry) =>
     `<article class="storeOrderChip"><b>${escapeHtml(entry.name)}</b><span>${entry.orderCount} order${entry.orderCount === 1 ? "" : "s"} · ${entry.pendingUnits} pending unit${entry.pendingUnits === 1 ? "" : "s"}</span></article>`
   ).join("");
+  const onlineStores = snapshot.stores.filter((store) => store.available).length;
+  document.getElementById("systemLabel").textContent = `${onlineStores}/${snapshot.stores.length} stores online`;
+}
+
+function renderStaffMetrics() {
+  const today = new Date().toLocaleDateString();
+  const isToday = (value) => value && new Date(value).toLocaleDateString() === today;
+  const dispatchedUnits = snapshot.orders.reduce((total, order) =>
+    total + order.items.filter((item) => item.status === "dispatched")
+      .reduce((quantity, item) => quantity + item.quantity, 0), 0);
+  const pendingRefunds = snapshot.financial.filter((operation) =>
+    operation.type === "refund" && operation.status === "pending").length;
+  const todaySales = snapshot.financial.filter((operation) =>
+    operation.type === "payment" && operation.status === "applied" && isToday(operation.appliedAt || operation.at))
+    .reduce((total, operation) => total + operation.amount, 0);
+
+  document.getElementById("staffTodayOrders").textContent = snapshot.orders.filter((order) => isToday(order.createdAt)).length;
+  document.getElementById("staffPendingUnits").textContent = snapshot.orderSummary.pendingUnits;
+  document.getElementById("staffDispatchedUnits").textContent = dispatchedUnits;
+  document.getElementById("staffRefundPending").textContent = pendingRefunds;
+  document.getElementById("staffSalesToday").textContent = money(todaySales);
+  document.getElementById("staffOrderCount").textContent = snapshot.orders.length;
 }
 
 function renderProducts() {
@@ -269,20 +292,33 @@ document.getElementById("refreshOrders").onclick = async () => {
   catch (error) { toast(error.message); }
 };
 
-document.querySelectorAll(".adminSideLink").forEach((button) => button.onclick = () => {
+document.getElementById("staffRefreshOrders").onclick = async () => {
+  try { await refreshDashboard(); toast("Orders and fulfilment data refreshed"); }
+  catch (error) { toast(error.message); }
+};
+
+document.querySelectorAll("[data-dashboard-link]").forEach((button) => button.onclick = () => {
+  const viewName = button.dataset.view || "admin";
+  const view = document.getElementById(`${viewName}View`);
   const target = document.getElementById(button.dataset.section);
-  if (!target || target.classList.contains("hidden")) return;
-  document.querySelectorAll(".adminSideLink").forEach((item) => item.classList.remove("active"));
+  if (!view || !target || target.classList.contains("hidden")) return;
+  document.querySelectorAll(".view").forEach((item) => item.classList.add("hidden"));
+  view.classList.remove("hidden");
+  document.querySelectorAll(".nav").forEach((item) => item.classList.toggle("active", item.dataset.view === viewName));
+  document.querySelectorAll("[data-dashboard-link]").forEach((item) => item.classList.remove("active"));
   button.classList.add("active");
   target.scrollIntoView({ behavior:"smooth", block:"start" });
 });
 
 document.querySelectorAll(".nav").forEach((button) => button.onclick = () => {
   document.querySelectorAll(".nav").forEach((item) => item.classList.remove("active"));
-  document.querySelectorAll(".adminSideLink").forEach((item) => item.classList.remove("active"));
+  document.querySelectorAll("[data-dashboard-link]").forEach((item) => item.classList.remove("active"));
   button.classList.add("active");
   if (button.dataset.view === "admin") {
-    document.querySelector('[data-section="adminTop"]').classList.add("active");
+    const section = currentUser.role === "admin" ? "adminTop" : "orderSection";
+    const dashboardLink = [...document.querySelectorAll("[data-dashboard-link]")].find((item) =>
+      item.dataset.section === section && !item.classList.contains("hidden"));
+    if (dashboardLink) dashboardLink.classList.add("active");
   }
   document.querySelectorAll(".view").forEach((view) => view.classList.add("hidden"));
   document.getElementById(`${button.dataset.view}View`).classList.remove("hidden");
@@ -319,7 +355,12 @@ function showApp(user) {
   const roleBadge = document.getElementById("roleBadge");
   roleBadge.textContent = roleLabels[user.role];
   roleBadge.classList.remove("hidden");
-  document.getElementById("adminTitle").textContent = user.role === "admin" ? "Admin Dashboard" : "Store fulfilment";
+  document.getElementById("adminTitle").textContent = user.role === "admin" ? "Admin Dashboard" : "Staff Dashboard";
+  document.getElementById("adminSubtitle").textContent = user.role === "admin"
+    ? "Orders, inventory and fulfilment across every store."
+    : "Manage orders, fulfilment and stock across all stores.";
+  document.getElementById("sidebarUserName").textContent = user.role === "admin" ? "Store administrator" : user.name;
+  document.getElementById("sidebarUserStore").textContent = user.role === "admin" ? "Owner / Admin" : `Staff ID · ${user.id}`;
   document.querySelectorAll("[data-roles]").forEach((button) => {
     button.classList.toggle("hidden", !button.dataset.roles.split(",").includes(user.role));
   });
@@ -328,6 +369,11 @@ function showApp(user) {
   document.getElementById("timelineView").classList.toggle("hidden", user.role === "customer");
   document.querySelector(".orderSection").classList.toggle("hidden", user.role === "admin");
   document.getElementById("staffManagement").classList.toggle("hidden", user.role !== "admin");
+  document.getElementById("demoControls").classList.toggle("hidden", user.role !== "admin");
+  document.querySelector(".opsSummary").classList.toggle("hidden", user.role === "staff");
+  document.querySelector(".staffMetrics").classList.toggle("hidden", user.role !== "staff");
+  document.querySelector(".staffTabs").classList.toggle("hidden", user.role !== "staff");
+  document.getElementById("staffQuickActions").classList.toggle("hidden", user.role !== "staff");
   document.getElementById("reset").classList.toggle("hidden", user.role !== "admin");
   document.getElementById("demoScenario").classList.toggle("hidden", user.role !== "admin");
   document.getElementById("concurrency").classList.toggle("hidden", user.role !== "admin");
@@ -344,6 +390,12 @@ function showApp(user) {
   document.querySelectorAll(".nav").forEach((button) => button.classList.remove("active"));
   const initialView = user.role === "customer" ? "shop" : "admin";
   document.querySelector(`[data-view="${initialView}"]`).classList.add("active");
+  if (user.role !== "customer") {
+    const initialSection = user.role === "admin" ? "adminTop" : "orderSection";
+    const initialLink = [...document.querySelectorAll("[data-dashboard-link]")].find((button) =>
+      button.dataset.section === initialSection && !button.classList.contains("hidden"));
+    if (initialLink) initialLink.classList.add("active");
+  }
   document.querySelectorAll(".view").forEach((view) => view.classList.add("hidden"));
   document.getElementById(`${initialView}View`).classList.remove("hidden");
   refreshDashboard().catch((error) => toast(error.message));

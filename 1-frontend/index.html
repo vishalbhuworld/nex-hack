@@ -12,14 +12,23 @@
     <nav id="demoNav" class="hidden">
       <button class="nav active" data-view="shop" data-roles="customer">Customer Shop</button>
       <button class="nav" data-view="admin" data-roles="admin,staff">Dashboard</button>
-      <button class="nav" data-view="timeline" data-roles="staff">Staff Timeline</button>
-      <div class="sidebarDivider" data-roles="admin"></div>
+      <button class="nav" data-view="timeline" data-roles="staff">Transaction log</button>
+      <div class="sidebarDivider" data-roles="admin,staff"></div>
       <span class="sidebarCaption" data-roles="admin">WORKSPACE</span>
-      <button class="adminSideLink active" data-section="adminTop" data-roles="admin">Overview</button>
-      <button class="adminSideLink" data-section="demoControls" data-roles="admin">Demo &amp; testing</button>
-      <button class="adminSideLink" data-section="inventorySection" data-roles="admin">Stores &amp; inventory</button>
-      <button class="adminSideLink" data-section="staffManagement" data-roles="admin">People &amp; access</button>
+      <span class="sidebarCaption" data-roles="staff">STORE WORKSPACE</span>
+      <button class="adminSideLink active" data-dashboard-link data-section="adminTop" data-roles="admin">Overview</button>
+      <button class="adminSideLink" data-dashboard-link data-section="demoControls" data-roles="admin">Demo &amp; testing</button>
+      <button class="adminSideLink" data-dashboard-link data-section="inventorySection" data-roles="admin">Stores &amp; inventory</button>
+      <button class="adminSideLink" data-dashboard-link data-section="staffManagement" data-roles="admin">People &amp; access</button>
+      <button class="adminSideLink" data-dashboard-link data-section="orderSection" data-roles="staff">Orders</button>
+      <button class="adminSideLink" data-dashboard-link data-section="inventorySection" data-roles="staff">Inventory</button>
+      <button class="adminSideLink" data-dashboard-link data-section="inventorySection" data-roles="staff">Store stock</button>
+      <button class="adminSideLink" data-dashboard-link data-section="orderSection" data-roles="staff">Fulfilment</button>
+      <button class="adminSideLink" data-dashboard-link data-view="timeline" data-section="recoveryIssues" data-roles="staff">Refunds &amp; issues</button>
+      <button class="adminSideLink" data-dashboard-link data-view="timeline" data-section="financial" data-roles="staff">Payments</button>
+      <button class="adminSideLink" data-dashboard-link data-view="timeline" data-section="timeline" data-roles="staff">Activity log</button>
     </nav>
+    <div class="sidebarUser" data-roles="staff"><span class="sidebarAvatar">V</span><span><b id="sidebarUserName">Store staff</b><small id="sidebarUserStore">All stores</small></span></div>
     <div class="headerActions"><button id="reset" class="ghost hidden">↻ Reset demo</button><button id="logout" class="ghost hidden">Sign out</button></div>
   </header>
 
@@ -97,8 +106,8 @@
 
     <section id="adminView" class="view hidden">
       <div class="sectionHeading adminHeading" id="adminTop">
-        <div><p class="eyebrow">OPERATIONS CONTROL</p><h1 id="adminTitle">Store fulfilment</h1><p class="adminSubtitle">Orders, inventory and fulfilment across every store.</p></div>
-        <span class="systemPill"><span></span> Operations active</span>
+        <div><p class="eyebrow">OPERATIONS CONTROL</p><h1 id="adminTitle">Store fulfilment</h1><p id="adminSubtitle" class="adminSubtitle">Orders, inventory and fulfilment across every store.</p></div>
+        <span class="systemPill"><span class="systemDot"></span><span id="systemLabel">Stores connecting</span></span>
       </div>
       <div class="opsSummary">
         <article class="opsMetric"><span>Total orders</span><b id="incomingOrderCount">0</b></article>
@@ -106,6 +115,13 @@
         <article class="opsMetric"><span>Completed orders</span><b id="completedOrderCount">0</b></article>
         <article class="opsMetric"><span>Units awaiting action</span><b id="pendingItemCount">0</b></article>
         <div id="storeOrderSummary" class="storeOrderSummary"></div>
+      </div>
+      <div class="staffMetrics hidden">
+        <article class="staffMetric staffMetricBlue"><span>Today's orders</span><b id="staffTodayOrders">0</b></article>
+        <article class="staffMetric staffMetricPurple"><span>Pending fulfilment</span><b id="staffPendingUnits">0</b></article>
+        <article class="staffMetric staffMetricGreen"><span>Out for delivery</span><b id="staffDispatchedUnits">0</b></article>
+        <article class="staffMetric staffMetricRose"><span>Refunds pending</span><b id="staffRefundPending">0</b></article>
+        <article class="staffMetric staffMetricGold"><span>Today's sales</span><b id="staffSalesToday">₹0</b></article>
       </div>
       <section id="demoControls" class="demoPanel">
         <div class="sectionTitle"><h2>Demo &amp; testing scenarios</h2><span>Safe tools for testing store operations</span></div>
@@ -139,11 +155,32 @@
           </section>
         </div>
       </section>
-      <section id="inventorySection" class="inventorySection">
-        <div class="sectionTitle"><h2>Store inventory</h2><span>Stock availability and reservations by store</span></div>
-        <div id="storeGrid" class="storeGrid"></div>
+      <div class="staffWorkspace">
+        <div class="staffPrimary">
+          <div class="staffTabs hidden" aria-label="Staff operations">
+            <button class="staffTab active" data-dashboard-link data-section="orderSection">Orders <b id="staffOrderCount">0</b></button>
+            <button class="staffTab" data-dashboard-link data-section="orderSection">Fulfilment</button>
+            <button class="staffTab" data-dashboard-link data-view="timeline" data-section="financial">Refunds</button>
+            <button class="staffTab" data-dashboard-link data-view="timeline" data-section="financial">Payments</button>
+          </div>
+          <div id="orderSection" class="orderSection"><div class="sectionTitle"><h2>Orders &amp; fulfilment</h2><span id="orderBadge"></span></div><div id="orders" class="orders"></div></div>
+        </div>
+        <aside class="staffRail">
+          <section id="inventorySection" class="inventorySection">
+            <div class="sectionTitle"><h2>Store stock</h2><span>Availability &amp; held units</span></div>
+            <div id="storeGrid" class="storeGrid"></div>
+          </section>
+          <section id="staffQuickActions" class="staffQuickActions hidden">
+            <div class="sectionTitle"><h2>Quick actions</h2></div>
+            <div class="staffQuickGrid">
+              <button data-dashboard-link data-section="orderSection">Open orders</button>
+              <button data-dashboard-link data-view="timeline" data-section="recoveryIssues">Review issues</button>
+              <button data-dashboard-link data-section="inventorySection">Check stock</button>
+              <button id="staffRefreshOrders">Refresh data</button>
+            </div>
+          </section>
+        </aside>
       </section>
-      <div class="orderSection"><div class="sectionTitle"><h2>Orders</h2><span id="orderBadge"></span></div><div id="orders" class="orders"></div></div>
     </section>
 
     <section id="timelineView" class="view hidden">
