@@ -110,8 +110,8 @@
             <form id="staffForm" class="staffForm">
               <label>Staff name<input name="name" required></label>
               <label>Staff ID<input name="id" minlength="3" required></label>
-              <label>Temporary password<input name="password" type="password" minlength="8" required></label>
-              <button class="primary">Create staff login</button>
+              <label>Temporary password<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+              <button type="submit" class="primary">Save</button>
             </form>
             <div id="staffList" class="staffList"></div>
           </section>
