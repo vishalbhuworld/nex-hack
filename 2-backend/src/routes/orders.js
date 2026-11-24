@@ -238,6 +238,14 @@ router.post("/:orderId/cancel", auth.authenticate, auth.allowRoles("customer", "
     if (req.user.role === "customer" && order.customerEmail !== req.user.email) {
       throw Object.assign(new Error("You can only cancel your own orders"), { status: 403 });
     }
+    const item = order.items.find((entry) => entry.itemId === req.body.itemId);
+    if (
+      req.user.role === "customer" &&
+      item?.status === "paid" &&
+      String(req.body.paymentCode || "").trim() !== order.paymentCode
+    ) {
+      throw Object.assign(new Error("Enter the unique order code to request a paid-item refund"), { status: 403 });
+    }
     const result = store.processFinancialEvent({
       orderId,
       eventId: req.body.eventId || `cancel-${orderId}-${Date.now()}`,

@@ -93,6 +93,11 @@ test("customers submit UTRs and admins verify payment to generate a code", async
     utr: "123456789012",
   });
   assert.equal(duplicateUtrResponse.status, 409);
+  const unpaidItemCancellation = await request(`/api/orders/${secondOrder.id}/cancel`, customer.token, {
+    eventId: "cancel-unpaid-item-without-order-code",
+    itemId: secondOrder.items[0].itemId,
+  });
+  assert.equal(unpaidItemCancellation.operation.status, "applied");
 
   const anotherCustomer = await auth.customerLogin(`other-order-test-${Date.now()}@example.com`);
   const unauthorizedQrResponse = await fetch(`${baseUrl}/api/orders/${placedOrder.id}/payment-qr`, {
@@ -160,9 +165,21 @@ test("customers submit UTRs and admins verify payment to generate a code", async
   assert.ok(customerOrder.items.every((item) => item.itemId && item.storeName));
 
   const selectedItem = customerOrder.items.find((item) => item.storeId === "store-a");
+  const missingCodeResponse = await rawRequest(`/api/orders/${placedOrder.id}/cancel`, customer.token, {
+    eventId: "orders-route-cancellation-missing-code",
+    itemId: selectedItem.itemId,
+  });
+  assert.equal(missingCodeResponse.status, 403);
+  const incorrectCodeResponse = await rawRequest(`/api/orders/${placedOrder.id}/cancel`, customer.token, {
+    eventId: "orders-route-cancellation-incorrect-code",
+    itemId: selectedItem.itemId,
+    paymentCode: "PAY-INVALID",
+  });
+  assert.equal(incorrectCodeResponse.status, 403);
   await request(`/api/orders/${placedOrder.id}/cancel`, customer.token, {
     eventId: "orders-route-cancellation-test",
     itemId: selectedItem.itemId,
+    paymentCode: payment.paymentCode,
   });
   const updatedOrders = await request("/api/orders", customer.token);
   const updatedOrder = updatedOrders.orders.find((order) => order.id === placedOrder.id);

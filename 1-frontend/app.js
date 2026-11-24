@@ -201,6 +201,7 @@ function renderCustomerOrders() {
   target.innerHTML = snapshot.orders.length ? snapshot.orders.map((order) => `
     <article class="orderCard">
       <div class="orderHead"><b>Order ${escapeHtml(order.id)}</b><span class="pill">${escapeHtml(order.status.replaceAll("_", " ").toUpperCase())}</span></div>
+      ${order.items.some((item) => item.status === "paid") ? `<label class="refundCodeEntry">Enter unique order code to request a refund<input data-refund-code="${escapeHtml(order.id)}" autocomplete="off"></label>` : ""}
       <div class="customerOrderItems">${order.items.map((item) => `
         <div class="customerOrderItem">
           <span class="part">${escapeHtml(item.name)} ×${item.quantity} · ${escapeHtml(item.storeName || item.storeId)} · ${escapeHtml(item.status)}</span>
@@ -245,17 +246,21 @@ function renderCustomerOrders() {
     const orderId = button.dataset.order;
     const itemId = button.dataset.cancelItem;
     const paid = button.dataset.itemStatus === "paid";
-    const amount = Number(button.dataset.itemAmount);
+    const refundCodeInput = paid
+      ? [...document.querySelectorAll("[data-refund-code]")].find((input) => input.dataset.refundCode === orderId)
+      : null;
+    const paymentCode = refundCodeInput?.value.trim() || "";
+    if (paid && !paymentCode) return toast("Enter the unique order code shown on this order");
     const prompt = paid
-      ? `Cancel ${button.dataset.itemName}? A demo refund of ${money(amount)} will be recorded.`
+      ? `Cancel ${button.dataset.itemName}? Its refund will be recorded after the order code is verified.`
       : `Cancel ${button.dataset.itemName}? Other items in this order will stay reserved.`;
     if (!window.confirm(prompt)) return;
     try {
       await api(`/api/orders/${orderId}/cancel`, {
         method:"POST",
-        body:JSON.stringify({ eventId:`customer-cancel-${orderId}-${itemId}`, itemId }),
+        body:JSON.stringify({ eventId:`customer-cancel-${orderId}-${itemId}`, itemId, ...(paid ? { paymentCode } : {}) }),
       });
-      toast(paid ? `Item cancelled. Demo refund ${money(amount)} recorded.` : "Item cancelled; the rest of the order remains.");
+      toast(paid ? `Item cancelled. Refund of ${money(amount)} recorded.` : "Item cancelled; the rest of the order remains.");
       await load();
     } catch (error) { toast(error.message); }
   });
@@ -613,9 +618,11 @@ function showApp(user) {
   refreshDashboard().catch((error) => toast(error.message));
   if (refreshTimer) window.clearInterval(refreshTimer);
   refreshTimer = window.setInterval(() => {
-    const hasPaymentDraft = currentUser?.role === "customer" &&
+    const hasPaymentDraft = currentUser?.role === "customer" && (
       [...document.querySelectorAll(".paymentProofForm")].some((form) =>
-        form.elements.utr.value.trim() || form.elements.proof.files.length > 0);
+        form.elements.utr.value.trim() || form.elements.proof.files.length > 0) ||
+      [...document.querySelectorAll("[data-refund-code]")].some((input) => input.value.trim())
+    );
     if (!document.hidden && currentUser && !hasPaymentDraft) {
       refreshDashboard().catch((error) => console.error("Background refresh failed:", error));
     }
